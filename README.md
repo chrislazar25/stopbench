@@ -76,9 +76,11 @@ With gpt-6.1-sol and a 6000 ms commit, the before-send runs take LiveKit's "rele
 
 Pipecat and LiveKit fail in opposite directions. Pipecat's default stops what it can, then tells the model `CANCELLED` even when the refund landed. LiveKit never stops anything, and tells the model what happened once the tool returns.
 
-### A second bug: the model is shown each tool call twice
+### A known bug that changes what the agent says: each tool call is sent twice
 
-With default settings, `livekit-plugins-openai` 1.8.8's Responses LLM chains requests with `previous_response_id`. Its follow-up request after a tool call also re-sends the `function_call` item that the previous response already holds, so the model sees the refund call twice and one result. This happens with or without a stop. In 6 baseline runs (no stop) with chaining on, 4 replies claimed a second refund, for example "Your $40 refund is confirmed. I'm sorry—I accidentally submitted the request twice, so an additional $40 refund may also be processed." With `store=False`, which turns chaining off, 0 of 6 did. The ledger had one refund in all 12 (`runs/livekit-chain-control.jsonl`). `runs/livekit-gpt-6.1-sol.jsonl` holds 40 stop runs with the default settings. `--no-chain` gives the clean runs in the table above.
+This is already reported upstream as [livekit/agents#5136](https://github.com/livekit/agents/issues/5136), open since 2026-03-18, with an open fix in [#7762](https://github.com/livekit/agents/pull/7762). The issue reports duplicate entries in OpenAI's logs. The runs here add what it does to the conversation.
+
+With default settings, `livekit-plugins-openai` 1.8.8's Responses LLM chains requests with `previous_response_id`. Its follow-up request after a tool call also re-sends the `function_call` item that the previous response already holds, so the model sees the refund call twice and one result. This happens with or without a stop. In 6 baseline runs (no stop) with chaining on, 4 replies claimed a second refund, for example "Your $40 refund is confirmed. I'm sorry—I accidentally submitted the request twice, so an additional $40 refund may also be processed." With `store=False`, which turns chaining off, 0 of 6 did. The ledger had one refund in all 12 (`runs/livekit-chain-control.jsonl`). `runs/livekit-gpt-6.1-sol.jsonl` holds 40 stop runs with the default settings, and 17 of their replies mention a second refund request. None of the 40 `--no-chain` runs do. `--no-chain` gives the clean runs in the table above.
 
 What this does not cover yet: real audio and voice activity detection, and models other than gpt-6.1-sol.
 
