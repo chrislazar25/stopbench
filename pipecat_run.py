@@ -154,7 +154,7 @@ class ScriptedLLM(LLMService):
 # provider -> (env var with the key, default model)
 PROVIDERS = {
     "anthropic": ("ANTHROPIC_API_KEY", "claude-haiku-5-5"),
-    "openai": ("OPENAI_API_KEY", "gpt-4.1"),
+    "openai": ("OPENAI_API_KEY", "gpt-6.1-sol"),
 }
 
 
@@ -162,11 +162,11 @@ def make_llm(kind: str, model: str, refund_id: str) -> LLMService:
     if kind == "scripted":
         return ScriptedLLM(refund_id)
     if kind == "openai":
-        from pipecat.services.openai.llm import OpenAILLMService
+        from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
 
-        return OpenAILLMService(
+        return OpenAIResponsesLLMService(
             api_key=os.environ["OPENAI_API_KEY"],
-            settings=OpenAILLMService.Settings(model=model),
+            settings=OpenAIResponsesLLMService.Settings(model=model),
         )
     from pipecat.services.anthropic.llm import AnthropicLLMService
 
