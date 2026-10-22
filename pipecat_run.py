@@ -1,12 +1,13 @@
 """Say "stop" to a Pipecat agent at three moments during a refund tool call.
 
 The scripted LLM makes the same tool call every run, so only the moment of the
-interruption varies. A real Claude model shows what the agent then tells the
-caller. Each run records what the ledger committed, what Pipecat wrote into the
+interruption varies. A real model (Claude or OpenAI) shows what the agent then
+tells the caller. Each run records what the ledger committed, what Pipecat wrote into the
 LLM context as the tool's result, and the agent's reply after the stop.
 
     python pipecat_run.py --runs 10
     python pipecat_run.py --llm anthropic --runs 5 --cancel true   # needs ANTHROPIC_API_KEY in .env
+    python pipecat_run.py --llm openai --runs 5 --cancel true      # needs OPENAI_API_KEY in .env
 """
 
 import argparse
@@ -150,9 +151,23 @@ class ScriptedLLM(LLMService):
         await self.push_frame(LLMFullResponseEndFrame())
 
 
+# provider -> (env var with the key, default model)
+PROVIDERS = {
+    "anthropic": ("ANTHROPIC_API_KEY", "claude-haiku-5-5"),
+    "openai": ("OPENAI_API_KEY", "gpt-4.1"),
+}
+
+
 def make_llm(kind: str, model: str, refund_id: str) -> LLMService:
     if kind == "scripted":
         return ScriptedLLM(refund_id)
+    if kind == "openai":
+        from pipecat.services.openai.llm import OpenAILLMService
+
+        return OpenAILLMService(
+            api_key=os.environ["OPENAI_API_KEY"],
+            settings=OpenAILLMService.Settings(model=model),
+        )
     from pipecat.services.anthropic.llm import AnthropicLLMService
 
     return AnthropicLLMService(
@@ -304,15 +319,18 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--out")
-    parser.add_argument("--llm", choices=["scripted", "anthropic"], default="scripted")
-    parser.add_argument("--model", default="claude-haiku-5-5")
+    parser.add_argument("--llm", choices=["scripted", *PROVIDERS], default="scripted")
+    parser.add_argument("--model")
     parser.add_argument("--moments", nargs="*", default=[m.value for m in Moment])
     parser.add_argument("--cancel", nargs="*", default=["true", "false"])
     args = parser.parse_args()
+    if args.llm != "scripted":
+        key_var, default_model = PROVIDERS[args.llm]
+        args.model = args.model or default_model
+        load_env(Path(".env"))
+        if not os.environ.get(key_var):
+            sys.exit(f"{key_var} is not set. Put it in .env (gitignored) or the environment.")
     out = args.out or ("runs/pipecat.jsonl" if args.llm == "scripted" else f"runs/pipecat-{args.model}.jsonl")
-    load_env(Path(".env"))
-    if args.llm == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit("ANTHROPIC_API_KEY is not set. Put it in .env (gitignored) or the environment.")
 
     logger.remove()
     logger.add(sys.stderr, level="WARNING")
