@@ -306,7 +306,7 @@ def load_env(path: Path):
     for line in path.read_text().splitlines():
         key, sep, value = line.partition("=")
         if sep and not key.strip().startswith("#"):
-            os.environ.setdefault(key.strip(), value.strip().strip('"'))
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
 def free_port() -> int:
