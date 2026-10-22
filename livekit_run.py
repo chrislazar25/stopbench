@@ -14,6 +14,7 @@ commit delay instead: 400 ms finishes inside that window, 6000 ms outlives it.
 
     python livekit_run.py --runs 10
     python livekit_run.py --llm openai --runs 5     # needs OPENAI_API_KEY in .env
+    python livekit_run.py --llm openai --runs 5 --no-chain
 """
 
 import argparse
@@ -94,6 +95,7 @@ class RunResult:
     tool_called: bool = True
     agent_reply: str | None = None
     followup_reply: str | None = None
+    chained: bool | None = None
 
     @property
     def landed(self) -> bool:
@@ -168,12 +170,16 @@ class NoNetworkLLM(llm.LLM):
         raise RuntimeError("the scripted agent overrides llm_node, so chat() must never run")
 
 
-def make_llm(kind: str, model: str) -> llm.LLM:
+def make_llm(kind: str, model: str, chain: bool) -> llm.LLM:
     if kind == "scripted":
         return NoNetworkLLM()
     from livekit.plugins import openai
 
-    return openai.responses.LLM(model=model)
+    if chain:
+        return openai.responses.LLM(model=model)
+    # store=False stops the plugin chaining with previous_response_id. Chained requests in 1.8.8
+    # re-send the function_call the previous response already holds, so the model sees it twice.
+    return openai.responses.LLM(model=model, store=False)
 
 
 def tool_outputs(items: list) -> list[str]:
@@ -216,7 +222,8 @@ def split_replies(items: list, stopped: bool) -> tuple[str | None, str | None]:
 
 
 async def one_run(
-    port: int, moment: Moment, delay_ms: int, run: int, lk_version: str, llm_kind: str, model: str
+    port: int, moment: Moment, delay_ms: int, run: int, lk_version: str, llm_kind: str, model: str,
+    chain: bool = True,
 ) -> RunResult:
     refund_id = uuid.uuid4().hex[:12]
     marks = Marks()
@@ -231,7 +238,7 @@ async def one_run(
 
     # http_context stands in for the job worker, which normally owns the plugin's HTTP session
     async with http_context.open(), AgentSession(
-        llm=make_llm(llm_kind, model), vad=None, turn_handling={"turn_detection": "manual"}
+        llm=make_llm(llm_kind, model, chain), vad=None, turn_handling={"turn_detection": "manual"}
     ) as session:
         await session.start(agent)
         session.generate_reply(user_input=USER_ASK)
@@ -286,6 +293,7 @@ async def one_run(
         tool_called=tool_called,
         agent_reply=agent_reply,
         followup_reply=followup_reply,
+        chained=None if llm_kind == "scripted" else chain,
     )
 
 
@@ -323,13 +331,15 @@ async def main():
     parser.add_argument("--model")
     parser.add_argument("--moments", nargs="*", default=[m.value for m in Moment])
     parser.add_argument("--commit-delay-ms", nargs="*", type=int, default=[400, 6000])
+    parser.add_argument("--no-chain", action="store_true", help="don't chain OpenAI requests (store=False)")
     args = parser.parse_args()
     if args.llm == "openai":
         args.model = args.model or "gpt-6.1-sol"
         load_env(Path(".env"))
         if not os.environ.get("OPENAI_API_KEY"):
             sys.exit("OPENAI_API_KEY is not set. Put it in .env (gitignored) or the environment.")
-    out = args.out or ("runs/livekit.jsonl" if args.llm == "scripted" else f"runs/livekit-{args.model}.jsonl")
+    suffix = "-unchained" if args.no_chain else ""
+    out = args.out or ("runs/livekit.jsonl" if args.llm == "scripted" else f"runs/livekit-{args.model}{suffix}.jsonl")
 
     logging.basicConfig(level=logging.WARNING)
     lk_version = version("livekit-agents")
@@ -342,7 +352,9 @@ async def main():
         try:
             for moment in [Moment(m) for m in args.moments]:
                 for run in range(args.runs):
-                    result = await one_run(port, moment, delay_ms, run, lk_version, args.llm, args.model)
+                    result = await one_run(
+                        port, moment, delay_ms, run, lk_version, args.llm, args.model, not args.no_chain
+                    )
                     results.append(result)
                     reply = f'  agent: "{result.agent_reply}"' if args.llm != "scripted" else ""
                     print(f"delay={delay_ms:<5} {moment.value:12} #{run}  {result.verdict}{reply}", flush=True)
