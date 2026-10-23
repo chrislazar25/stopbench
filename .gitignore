@@ -6,3 +6,4 @@ runs/*.tmp
 runs/*.db
 .venv-livekit/
 .venv-realtime/
+.verify/
