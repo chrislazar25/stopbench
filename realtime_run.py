@@ -1,10 +1,7 @@
 """Say "stop" to an OpenAI Agents SDK realtime agent while its refund tool runs.
 
-The realtime twin of livekit_run.py: same prompts, tool timing and ledger (stopbench.py).
-gpt-realtime-2.1 makes the tool call itself. There is no scripted mode: the SDK's scripted
-test model has no response.create sequencer, so it can't show the ordering this runner
-measures. Output is text only, and the stop is typed: session.interrupt(), then
-session.send_message(), the two calls an app makes when its user says stop.
+There is no scripted mode: the SDK's scripted test model has no response.create sequencer,
+so it can't show the ordering this runner measures.
 
 The SDK never cancels a running tool on interrupt, and always sends the tool's result with
 a request for a new response. Whether the model has that result when it answers the stop
@@ -16,15 +13,8 @@ comes down to one setting, async_tool_calls:
   response.create waits behind the call's response; the SDK then merges it with the
   result's, and the model answers once, seeing the stop and then the result.
 
-So the matrix varies async_tool_calls. The ledger's commit delay can't move that ordering
-here (unlike LiveKit's 5 s wait), so it stays 400 ms; pass --commit-delay-ms 6000 to check.
-
-Each run records what the ledger committed, the server's own event stream (conversation
-items and responses, with receive times), the tool output the model had when it answered
-the stop, the reply to the stop, and any later reply the model made on its own.
-
     python realtime_run.py --runs 5                       # needs OPENAI_API_KEY in .env
-    python realtime_run.py --runs 5 --async-tools true    # default setting only
+    python realtime_run.py --runs 5 --async-tools true
     python realtime_run.py --runs 2 --commit-delay-ms 400 6000
 """
 
@@ -72,32 +62,25 @@ DEFAULT_MODEL = "gpt-realtime-2.1"
 LEDGER_DB = "runs/ledger-realtime.db"
 
 
-# Only parse_server_event knows OpenAI Realtime field names. Everything after it works on
-# these four types. `event` tags each one so the jsonl round-trips (see load_wire).
-
 ItemKind = Literal["user", "assistant", "function_call", "function_call_output", "other"]
+ResponseStatus = Literal["completed", "cancelled", "incomplete", "failed"]
 
 
 @dataclass(frozen=True)
 class Item:
-    """The server added an item to the conversation."""
-
-    # time.time() on receipt. With async_tool_calls=False the tool blocks the reader, so
-    # events behind it are received late; only the order says what the model had.
+    # With async_tool_calls=False the tool blocks the reader, so events behind it are
+    # received late; only the order says what the model had.
     t: float
     item_id: str
     kind: ItemKind
     call_id: str | None
-    # user text, the function name, or the tool output. Assistant text and call arguments
-    # stream in after the item is added; ResponseEnd has them.
+    # Assistant text and call arguments stream in after the item is added; ResponseEnd has them.
     text: str
     event: Literal["item"] = "item"
 
 
 @dataclass(frozen=True)
 class ResponseStart:
-    """The model starts a response over the conversation as it stands."""
-
     t: float
     response_id: str
     event: Literal["response_start"] = "response_start"
@@ -107,9 +90,9 @@ class ResponseStart:
 class ResponseEnd:
     t: float
     response_id: str
-    status: str  # completed | cancelled | incomplete | failed
+    status: ResponseStatus
     text: str | None
-    calls: tuple[str, ...]  # "name(arguments)" for each function this response called
+    calls: tuple[str, ...]
     event: Literal["response_end"] = "response_end"
 
 
@@ -131,7 +114,6 @@ def message_text(content: list[dict[str, Any]]) -> str:
 
 
 def parse_server_event(raw: dict[str, Any], t: float) -> Wire | None:
-    """One raw server event as a wire type; None for the events not kept."""
     match raw["type"]:
         case "conversation.item.added":
             item = raw["item"]
@@ -160,7 +142,6 @@ def parse_server_event(raw: dict[str, Any], t: float) -> Wire | None:
 
 
 def load_wire(rows: list[dict[str, Any]]) -> list[Wire]:
-    """The wire of a jsonl record, so a check can rerun read_wire on it."""
     return [
         WIRE_TYPES[row["event"]](**({**row, "calls": tuple(row["calls"])} if "calls" in row else row))
         for row in rows
@@ -168,12 +149,6 @@ def load_wire(rows: list[dict[str, Any]]) -> list[Wire]:
 
 
 class WireTap(RealtimeModelListener):
-    """Records the server's events in arrival order, timestamped on receipt.
-
-    Added to the model before the session connects, so for every event it runs before the
-    session's own listener.
-    """
-
     def __init__(self) -> None:
         self.events: list[Wire] = []
         self._changed = asyncio.Event()
@@ -186,10 +161,8 @@ class WireTap(RealtimeModelListener):
                 self._changed.set()
 
     async def settled(self, settle_s: float = SETTLE_S, timeout_s: float = LLM_TIMEOUT_S) -> None:
-        """Return once is_quiet has held for settle_s with no new event, or at timeout_s.
-
-        This catches a reply the model makes on its own after the tool's result lands: that
-        response starts only after the stop's reply ends.
+        """A reply the model makes on its own after the tool's result lands starts only after
+        the stop's reply ends, so quiet must hold for settle_s before this returns.
         """
         deadline = time.time() + timeout_s
         while (left := deadline - time.time()) > 0:
@@ -203,7 +176,6 @@ class WireTap(RealtimeModelListener):
 
 
 def is_quiet(wire: Sequence[Wire]) -> bool:
-    """The tool's result reached the server and every started response has ended."""
     has_output = any(isinstance(e, Item) and e.kind == "function_call_output" for e in wire)
     started = {e.response_id for e in wire if isinstance(e, ResponseStart)}
     ended = {e.response_id for e in wire if isinstance(e, ResponseEnd)}
@@ -212,20 +184,16 @@ def is_quiet(wire: Sequence[Wire]) -> bool:
 
 @dataclass(frozen=True)
 class Reading:
-    """What a run's wire says. Field names match livekit_run.py's RunResult where they can."""
-
-    tool_outputs: list[str]  # every function_call_output the server got, "call_id: output"
-    reply_context: list[str]  # the ones already in the conversation when the reply started
-    agent_reply: str | None  # the reply to the stop (with no stop: the reply to the result)
-    followup_reply: str | None  # every later response; nobody spoke after the stop
-    reply_status: str | None  # the reply's response.done status; None if it never ended
+    tool_outputs: list[str]
+    reply_context: list[str]
+    agent_reply: str | None
+    followup_reply: str | None
+    reply_status: ResponseStatus | None
     errors: list[str]
 
 
 def read_wire(wire: Sequence[Wire], stopped: bool) -> Reading:
-    """Derive what the model had when it answered, from the server's own event order.
-
-    The server applies client events in the order they arrive on the one websocket and
+    """The server applies client events in the order they arrive on the one websocket and
     announces each conversation change before anything that depends on it. So an Item that
     comes before a ResponseStart was in the conversation that response read. The order
     decides; the receive times only annotate.
@@ -262,8 +230,6 @@ def read_wire(wire: Sequence[Wire], stopped: bool) -> Reading:
     )
 
 
-# what the model had for the refund call when it answered the stop -> verdict, once it landed.
-# Same strings as livekit_run.py; this SDK has no placeholder state.
 VERDICT_BY_TOLD = {
     "result": "ok: landed, model told landed",
     "nothing": "BLIND: refund landed, model told nothing",
@@ -315,8 +281,6 @@ class RunResult:
 
 
 def refund_tool(url: str, refund_id: str, marks: Marks) -> FunctionTool:
-    """issue_refund for one run, with the same body as livekit_run.py's."""
-
     @function_tool
     async def issue_refund(amount_cents: int) -> dict:
         """Refund the caller's payment. Sends the refund to the payment provider.
@@ -349,6 +313,8 @@ async def one_run(
 
     tap = WireTap()
     transport = OpenAIRealtimeWebSocketModel()
+    # Added before the session connects, so for every event the tap runs before the
+    # session's own listener.
     transport.add_listener(tap)
     agent = RealtimeAgent(name="support", instructions=SYSTEM_PROMPT, tools=[refund_tool(url, refund_id, marks)])
     runner = RealtimeRunner(agent, model=transport, config={

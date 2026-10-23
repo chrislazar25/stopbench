@@ -1,9 +1,5 @@
-"""What every stopbench runner shares: the caller, the tool's timing and the moments.
-
-Each framework gets the same prompts, the same refund tool timing and the same four
-moments for the stop, so their results compare. Standard library only: each
-framework has its own venv, because their dependencies conflict, and every runner
-imports this file.
+"""Standard library only: each framework has its own venv, because their dependencies
+conflict, and every runner imports this file.
 """
 
 import asyncio
@@ -43,14 +39,6 @@ class Marks:
 
 
 async def reach_moment(marks: Marks, moment: Moment) -> bool:
-    """Wait until the refund tool reaches `moment`. False if it never got there within
-    LLM_TIMEOUT_S, which means the model did not call issue_refund.
-
-    This is the one definition of the moments. Awaiting a coroutine adds no scheduling
-    point, so a runner that awaits this keeps the event-loop schedule of the same awaits
-    written inline.
-    """
-
     async def wait(event: asyncio.Event):
         await asyncio.wait_for(event.wait(), LLM_TIMEOUT_S)
 
