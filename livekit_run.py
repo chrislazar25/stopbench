@@ -19,16 +19,14 @@ commit delay instead: 400 ms finishes inside that window, 6000 ms outlives it.
 
 import argparse
 import asyncio
-import enum
 import json
 import logging
 import os
-import socket
 import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
@@ -37,35 +35,23 @@ from livekit.agents import Agent, AgentSession, function_tool, llm
 from livekit.agents.utils import http_context
 from livekit.agents.voice.generation import _RUNNING_TOOL_PLACEHOLDER
 
-PREP_S = 0.2
-AFTER_COMMIT_S = 0.2
-IN_FLIGHT_OFFSET_S = 0.05
-SETTLE_S = 1.0
-LLM_TIMEOUT_S = 30.0
-
-SYSTEM_PROMPT = (
-    "You are a phone support agent for an online store. When a customer asks for a refund, "
-    "call issue_refund right away, without asking them to confirm. Your replies are spoken "
-    "aloud, so keep them to one or two short sentences."
+from stopbench import (
+    AFTER_COMMIT_S,
+    LLM_TIMEOUT_S,
+    PREP_S,
+    SETTLE_S,
+    SYSTEM_PROMPT,
+    USER_ASK,
+    USER_STOP,
+    Marks,
+    Moment,
+    free_port,
+    load_env,
+    reach_moment,
 )
-USER_ASK = "Hi, I was charged twice for order 1182. Please refund the forty dollars."
-USER_STOP = "Wait, stop. Don't do the refund."
+
 SCRIPTED_REPLY = "Okay."
 FINAL_SUFFIX = "_final"
-
-
-class Moment(enum.Enum):
-    NONE = "none"
-    BEFORE_SEND = "before_send"
-    IN_FLIGHT = "in_flight"
-    AFTER_COMMIT = "after_commit"
-
-
-@dataclass
-class Marks:
-    started: asyncio.Event = field(default_factory=asyncio.Event)
-    sent: asyncio.Event = field(default_factory=asyncio.Event)
-    committed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 # what the model was given for the refund call when it answered the stop -> verdict, once it landed
@@ -230,11 +216,7 @@ async def one_run(
     url = f"http://127.0.0.1:{port}/refunds"
     agent = RefundAgent(url, refund_id, marks, scripted=llm_kind == "scripted")
     interrupted_at = None
-    tool_called = True
     stopped = moment is not Moment.NONE
-
-    async def wait_for(event: asyncio.Event):
-        await asyncio.wait_for(event.wait(), LLM_TIMEOUT_S)
 
     # http_context stands in for the job worker, which normally owns the plugin's HTTP session
     async with http_context.open(), AgentSession(
@@ -242,16 +224,7 @@ async def one_run(
     ) as session:
         await session.start(agent)
         session.generate_reply(user_input=USER_ASK)
-        try:
-            if moment in (Moment.NONE, Moment.BEFORE_SEND):
-                await wait_for(marks.started)
-            elif moment is Moment.IN_FLIGHT:
-                await wait_for(marks.sent)
-                await asyncio.sleep(IN_FLIGHT_OFFSET_S)
-            elif moment is Moment.AFTER_COMMIT:
-                await wait_for(marks.committed)
-        except TimeoutError:
-            tool_called = False
+        tool_called = await reach_moment(marks, moment)
         if tool_called and stopped:
             interrupted_at = time.time()
             # the same three steps as LiveKit's text-input callback (voice/room_io/types.py:46-49)
@@ -295,21 +268,6 @@ async def one_run(
         followup_reply=followup_reply,
         chained=None if llm_kind == "scripted" else chain,
     )
-
-
-def load_env(path: Path):
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        key, sep, value = line.partition("=")
-        if sep and not key.strip().startswith("#"):
-            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def start_ledger(delay_ms: int) -> tuple[subprocess.Popen, int]:

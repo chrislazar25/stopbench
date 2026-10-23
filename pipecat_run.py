@@ -12,15 +12,13 @@ LLM context as the tool's result, and the agent's reply after the stop.
 
 import argparse
 import asyncio
-import enum
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import aiohttp
@@ -45,34 +43,22 @@ from pipecat.services.llm_service import FunctionCallParams, LLMService
 from pipecat.services.settings import LLMSettings
 from pipecat.workers.runner import WorkerRunner
 
-PREP_S = 0.2
-AFTER_COMMIT_S = 0.2
-COMMIT_DELAY_MS = 400
-IN_FLIGHT_OFFSET_S = 0.05
-SETTLE_S = 1.0
-LLM_TIMEOUT_S = 30.0
-
-SYSTEM_PROMPT = (
-    "You are a phone support agent for an online store. When a customer asks for a refund, "
-    "call issue_refund right away, without asking them to confirm. Your replies are spoken "
-    "aloud, so keep them to one or two short sentences."
+from stopbench import (
+    AFTER_COMMIT_S,
+    LLM_TIMEOUT_S,
+    PREP_S,
+    SETTLE_S,
+    SYSTEM_PROMPT,
+    USER_ASK,
+    USER_STOP,
+    Marks,
+    Moment,
+    free_port,
+    load_env,
+    reach_moment,
 )
-USER_ASK = "Hi, I was charged twice for order 1182. Please refund the forty dollars."
-USER_STOP = "Wait, stop. Don't do the refund."
 
-
-class Moment(enum.Enum):
-    NONE = "none"
-    BEFORE_SEND = "before_send"
-    IN_FLIGHT = "in_flight"
-    AFTER_COMMIT = "after_commit"
-
-
-@dataclass
-class Marks:
-    started: asyncio.Event = field(default_factory=asyncio.Event)
-    sent: asyncio.Event = field(default_factory=asyncio.Event)
-    committed: asyncio.Event = field(default_factory=asyncio.Event)
+COMMIT_DELAY_MS = 400
 
 
 @dataclass
@@ -239,26 +225,12 @@ async def one_run(
     tool_called = True
     reply_from = 1
 
-    async def wait_for(event: asyncio.Event):
-        await asyncio.wait_for(event.wait(), LLM_TIMEOUT_S)
-
     async def drive():
         nonlocal interrupted_at, tool_called, reply_from
         await task.queue_frame(
             LLMMessagesAppendFrame(messages=[{"role": "user", "content": USER_ASK}], run_llm=True)
         )
-        try:
-            if moment is Moment.NONE:
-                await wait_for(marks.started)
-            elif moment is Moment.BEFORE_SEND:
-                await wait_for(marks.started)
-            elif moment is Moment.IN_FLIGHT:
-                await wait_for(marks.sent)
-                await asyncio.sleep(IN_FLIGHT_OFFSET_S)
-            elif moment is Moment.AFTER_COMMIT:
-                await wait_for(marks.committed)
-        except TimeoutError:
-            tool_called = False
+        tool_called = await reach_moment(marks, moment)
         if tool_called and moment is not Moment.NONE:
             interrupted_at = time.time()
             await task.queue_frame(InterruptionFrame())
@@ -298,21 +270,6 @@ async def one_run(
         tool_called=tool_called,
         agent_reply=assistant_text(context.get_messages(), reply_from),
     )
-
-
-def load_env(path: Path):
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        key, sep, value = line.partition("=")
-        if sep and not key.strip().startswith("#"):
-            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 async def main():
