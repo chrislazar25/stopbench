@@ -60,7 +60,7 @@ Proof goes to `.verify/<timestamp>-<label>-<random>/`, which is gitignored and n
 - `<name>.console.txt` holds the runner's output, including the verdict and the agent's words for each run;
 - `<name>.jsonl` holds the records;
 - `<name>.db` is the ledger the runner wrote, the payments side of the story;
-- `<name>.check.txt` holds the check's per-cell table and every failure. A standalone `check` writes it to a new `.verify/<timestamp>/` folder, never next to a committed file.
+- `<name>.check.txt` holds the check's per-cell table and every failure. A standalone `check` writes it to a new `.verify/<timestamp>-check-<name>-<random>/` folder, never next to a committed file.
 
 `check` proves these for each record, and exits 1 if any fails:
 

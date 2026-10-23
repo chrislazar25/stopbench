@@ -79,11 +79,14 @@ def make_handler(db_path: str, commit_delay_s: float, lock: threading.Lock):
     return Handler
 
 
-def exit_with_parent(parent: int):
+def exit_with(owner: int):
     """A runner killed without cleanup would leave this ledger serving forever."""
-    while os.getppid() == parent:
+    while True:
+        try:
+            os.kill(owner, 0)
+        except ProcessLookupError:
+            os._exit(0)
         time.sleep(0.5)
-    os._exit(0)
 
 
 def main():
@@ -91,12 +94,14 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--db", default="runs/ledger.db")
     parser.add_argument("--commit-delay-ms", type=int, default=400)
+    parser.add_argument("--owner-pid", type=int, help="exit when this process is gone")
     args = parser.parse_args()
 
     with sqlite3.connect(args.db) as db:
         db.execute(SCHEMA)
 
-    threading.Thread(target=exit_with_parent, args=(os.getppid(),), daemon=True).start()
+    if args.owner_pid:
+        threading.Thread(target=exit_with, args=(args.owner_pid,), daemon=True).start()
     handler = make_handler(args.db, args.commit_delay_ms / 1000, threading.Lock())
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     print(f"ledger listening on {args.port}", flush=True)

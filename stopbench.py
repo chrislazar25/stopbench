@@ -4,6 +4,7 @@ conflict, and every runner imports this file.
 
 import asyncio
 import enum
+import hashlib
 import json
 import os
 import socket
@@ -114,7 +115,8 @@ def ledger(db: Path, commit_delay_ms: int):
     """Runs ledger.py as its own process, like a payments provider, and yields its port."""
     port = free_port()
     proc = subprocess.Popen(
-        [sys.executable, "ledger.py", "--port", str(port), "--db", str(db), "--commit-delay-ms", str(commit_delay_ms)],
+        [sys.executable, "ledger.py", "--port", str(port), "--db", str(db), "--commit-delay-ms", str(commit_delay_ms),
+         "--owner-pid", str(os.getpid())],
         stdout=subprocess.PIPE,
         text=True,
     )
@@ -125,12 +127,22 @@ def ledger(db: Path, commit_delay_ms: int):
         yield port
     finally:
         proc.terminate()
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 def git_version() -> str:
-    out = subprocess.run(["git", "describe", "--always", "--dirty"], capture_output=True, text=True)
-    return out.stdout.strip() or "unknown"
+    """The commit, plus a hash of any uncommitted diff, so a dirty run still names the code it ran."""
+    def git(*args: str) -> str:
+        repo = Path(__file__).resolve().parent
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True).stdout
+
+    commit = git("rev-parse", "HEAD").strip() or "unknown"
+    diff = git("diff", "HEAD")
+    return f"{commit}+diff.{hashlib.sha256(diff.encode()).hexdigest()[:12]}" if diff else commit
 
 
 class Results:

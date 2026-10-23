@@ -18,7 +18,7 @@ This directory is the maintained source for verifying stopbench's user-facing be
 
 - A proof is the run's `.verify/` folder: console output, jsonl, the ledger db beside it and `check.txt` with `check: PASS`.
 - Quote the agent's words from the console file when a claim is about what the agent said.
-- If a cell can't run (missing key, runner busy), report the command and the unmet precondition. Don't report it as verified through another cell.
+- If a cell can't run (missing key, venv drift), report the command and the unmet precondition. Don't report it as verified through another cell.
 
 ## Feature entry contract
 

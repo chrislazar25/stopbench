@@ -6,7 +6,7 @@ Run from the repo root with any python3 (stdlib only):
     python3 .claude/skills/verify-stopbench/verify.py doctor
     python3 .claude/skills/verify-stopbench/verify.py ledger
     python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments in_flight --cancel true
-    python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat [.verify/<id>/ledger.db]
+    python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat [.verify/<id>/pipecat.db]
 
 Evidence goes to .verify/<id>/ (gitignored) and survives cleanup.
 """
