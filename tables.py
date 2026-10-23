@@ -19,7 +19,11 @@ from stopbench import USER_STOP, Moment
 
 SECOND_REFUND = ["twice", "two $40 refund", "second $40 refund", "second refund", "second request", "duplicate refund"]
 
-AXIS = {"pipecat": "cancel_on_interruption", "livekit": "commit_delay_ms", "openai-agents-realtime": "async_tool_calls"}
+AXIS = {
+    "pipecat": "cancel_on_interruption", "livekit": "commit_delay_ms", "openai-agents-realtime": "async_tool_calls",
+    "gemini-live": "behavior", "elevenlabs-agents": "interruption_mode", "retell": "speak_after_execution",
+    "vapi": "async_tool",
+}
 MOMENT_ORDER = [m.value for m in Moment]
 
 
