@@ -21,7 +21,6 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import aiohttp
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -44,12 +43,14 @@ from pipecat.services.llm_service import FunctionCallParams, LLMService
 from pipecat.services.settings import LLMSettings
 from pipecat.workers.runner import WorkerRunner
 
+import refund
 from stopbench import (
     AFTER_COMMIT_S,
     LLM_TIMEOUT_S,
     PREP_S,
     SETTLE_S,
     SYSTEM_PROMPT,
+    TOOL_DESCRIPTION,
     USER_ASK,
     USER_STOP,
     Marks,
@@ -201,23 +202,15 @@ async def one_run(
     marks = Marks()
     url = f"http://127.0.0.1:{port}/refunds"
 
-    async def issue_refund(params: FunctionCallParams):
-        marks.started.set()
-        await asyncio.sleep(PREP_S)
-        async with aiohttp.ClientSession() as session:
-            marks.sent.set()
-            amount = params.arguments.get("amount_cents", 4000)
-            async with session.post(url, json={"refund_id": refund_id, "amount_cents": amount}) as resp:
-                body = await resp.json()
-        marks.committed.set()
-        await asyncio.sleep(AFTER_COMMIT_S)
-        await params.result_callback(body)
+    async def tool(params: FunctionCallParams):
+        amount = params.arguments.get("amount_cents", 4000)
+        await params.result_callback(await refund.issue_refund(url, refund_id, amount, marks))
 
     tools = ToolsSchema(
         standard_tools=[
             FunctionSchema(
                 name="issue_refund",
-                description="Refund the caller's payment. Sends the refund to the payment provider.",
+                description=TOOL_DESCRIPTION,
                 properties={"amount_cents": {"type": "integer", "description": "Amount in cents."}},
                 required=["amount_cents"],
             )
@@ -226,7 +219,7 @@ async def one_run(
     context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}], tools=tools)
     aggregators = LLMContextAggregatorPair(context)
     llm = make_llm(llm_kind, model, refund_id)
-    llm.register_function("issue_refund", issue_refund, cancel_on_interruption=cancel)
+    llm.register_function("issue_refund", tool, cancel_on_interruption=cancel)
 
     task = PipelineWorker(
         Pipeline([aggregators.user(), llm, aggregators.assistant()]), cancel_on_idle_timeout=False
@@ -260,9 +253,7 @@ async def one_run(
     await runner.add_workers(task)
     await asyncio.gather(runner.run(), drive())
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{url}/{refund_id}") as resp:
-            ledger = await resp.json()
+    ledger = await refund.read_ledger(url, refund_id)
     rows = ledger["rows"]
     return RunResult(
         framework="pipecat",

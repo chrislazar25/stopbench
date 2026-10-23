@@ -33,7 +33,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Literal
 
-import aiohttp
 from agents import FunctionTool, function_tool
 from agents.realtime import (
     OpenAIRealtimeWebSocketModel,
@@ -43,12 +42,12 @@ from agents.realtime import (
 )
 from agents.realtime.model_events import RealtimeModelEvent
 
+import refund
 from stopbench import (
-    AFTER_COMMIT_S,
     LLM_TIMEOUT_S,
-    PREP_S,
     SETTLE_S,
     SYSTEM_PROMPT,
+    TOOL_DESCRIPTION,
     USER_ASK,
     USER_STOP,
     Marks,
@@ -278,25 +277,15 @@ class RunResult:
 
 
 def refund_tool(url: str, refund_id: str, marks: Marks) -> FunctionTool:
-    @function_tool
-    async def issue_refund(amount_cents: int) -> dict:
-        """Refund the caller's payment. Sends the refund to the payment provider.
-
+    @function_tool(name_override="issue_refund", description_override=TOOL_DESCRIPTION)
+    async def tool(amount_cents: int) -> dict:
+        """
         Args:
             amount_cents: Amount in cents.
         """
-        marks.started.set()
-        await asyncio.sleep(PREP_S)
-        async with aiohttp.ClientSession() as session:
-            marks.sent.set()
-            payload = {"refund_id": refund_id, "amount_cents": amount_cents}
-            async with session.post(url, json=payload) as resp:
-                body = await resp.json()
-        marks.committed.set()
-        await asyncio.sleep(AFTER_COMMIT_S)
-        return body
+        return await refund.issue_refund(url, refund_id, amount_cents, marks)
 
-    return issue_refund
+    return tool
 
 
 async def one_run(
@@ -332,9 +321,7 @@ async def one_run(
             # The tool must finish before close, or the SDK drops its output.
             await tap.settled()
 
-    async with aiohttp.ClientSession() as http:
-        async with http.get(f"{url}/{refund_id}") as resp:
-            ledger = await resp.json()
+    ledger = await refund.read_ledger(url, refund_id)
     rows = ledger["rows"]
     return RunResult(
         framework="openai-agents-realtime",
