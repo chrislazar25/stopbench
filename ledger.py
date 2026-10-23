@@ -9,6 +9,7 @@ payment APIs do.
 
 import argparse
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -78,6 +79,13 @@ def make_handler(db_path: str, commit_delay_s: float, lock: threading.Lock):
     return Handler
 
 
+def exit_with_parent(parent: int):
+    """A runner killed without cleanup would leave this ledger serving forever."""
+    while os.getppid() == parent:
+        time.sleep(0.5)
+    os._exit(0)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
@@ -88,6 +96,7 @@ def main():
     with sqlite3.connect(args.db) as db:
         db.execute(SCHEMA)
 
+    threading.Thread(target=exit_with_parent, args=(os.getppid(),), daemon=True).start()
     handler = make_handler(args.db, args.commit_delay_ms / 1000, threading.Lock())
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     print(f"ledger listening on {args.port}", flush=True)
