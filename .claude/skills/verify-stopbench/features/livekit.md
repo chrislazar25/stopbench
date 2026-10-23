@@ -26,6 +26,6 @@ Preconditions:
 
 ## Gotchas
 
-- The runner depends on private LiveKit names: `_RUNNING_TOOL_PLACEHOLDER`, `_claim_user_turn` and the `_final` call-id suffix. After a LiveKit upgrade, rerun the 6000 ms in-flight cell first. A silent change shows as `PENDING` turning into another verdict.
+- The runner depends on LiveKit internals: `_RUNNING_TOOL_PLACEHOLDER`, `_claim_user_turn`, the `_final` call-id suffix and the 5 s `INTERRUPTION_TIMEOUT`. `assert_internals()` stops the runner at startup if the last three moved. The placeholder text is imported, so only a change in how LiveKit uses it would slip past. After a LiveKit upgrade, rerun the 6000 ms in-flight cell first. A silent change shows as `PENDING` turning into another verdict.
 - `reply_context` is the second `llm_node` call by position.
 - Without `--no-chain`, replies can claim a second refund that the ledger never got. That is the upstream bug, not a runner fault.
