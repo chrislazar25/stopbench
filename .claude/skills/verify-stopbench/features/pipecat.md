@@ -18,13 +18,13 @@ Preconditions:
 
 - `verify.py doctor` prints `doctor: OK`, with no `pipecat_run.py` running.
 
-- **Default setting, three stops.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments before_send in_flight after_commit --cancel true`. The console shows `ok: stopped, model told cancelled` for before_send and `LIE: refund landed, model told cancelled` for the other two.
-- **No-cancel setting.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments before_send in_flight --cancel false`. before_send shows `IGNORED`, and the refund lands in both.
+- **Default setting, three stops.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments before_send in_flight after_commit --cancel true`. The console shows `ok: stopped` for before_send and `LIE: refund landed, model told cancelled` for the other two.
+- **No-cancel setting.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments before_send in_flight --cancel false`. before_send shows `IGNORED`, in_flight shows `PENDING: refund landed, model told still in progress`, and the refund lands in both.
 - **Real model, paid.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --llm openai --moments in_flight --cancel true`. The console's agent line says the refund was canceled, and `check.txt` shows `landed` 1.
 - **Proof.** Each run's `check.txt` ends `check: PASS`.
 
 ## Gotchas
 
-- With `--cancel false`, the verdict reads `ok: landed, model told landed` even when `tool_result_in_context` holds Pipecat's async "still running" placeholder. Read the field, not just the verdict.
+- With `--cancel false`, the stop message starts a new turn while the tool runs, so the model gets Pipecat's async "still running" note and the run reads `PENDING`. The real result arrives later in a separate message, which `tool_result_in_context` does not hold.
 - `agent_reply` joins every assistant message after the stop, so a stop reply and a later reply arrive as one string.
 - Values for `--cancel` other than the lowercase string `true` count as false.

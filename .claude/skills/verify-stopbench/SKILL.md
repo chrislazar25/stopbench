@@ -13,7 +13,7 @@ Every command below runs from the repo root. The helper is stdlib-only and runs 
 python3 .claude/skills/verify-stopbench/verify.py doctor
 python3 .claude/skills/verify-stopbench/verify.py ledger
 python3 .claude/skills/verify-stopbench/verify.py run <pipecat|livekit|realtime> [runner flags]
-python3 .claude/skills/verify-stopbench/verify.py check <file.jsonl> <pipecat|livekit|realtime>
+python3 .claude/skills/verify-stopbench/verify.py check <file.jsonl> <pipecat|livekit|realtime> [ledger.db]
 ```
 
 ## Launch
@@ -62,10 +62,12 @@ Proof goes to `.verify/<timestamp>/`, which is gitignored and never deleted by c
 - the ledger db snapshot is the payments side of the story;
 - `<name>.check.txt` holds the check's per-cell table and every failure. A standalone `check` writes it to a new `.verify/<timestamp>/` folder, never next to a committed file.
 
-`check` proves three things for each record, and exits 1 if any fails:
+`check` proves these for each record, and exits 1 if any fails:
 
-- The ledger's row count for the record's `refund_id` equals `ledger_count`.
+- The ledger's row count for the record's `refund_id` equals `ledger_count`. This needs the ledger db, which `run` passes on its own. A standalone `check` without a db prints `ledger NOT checked`, and that is the honest state of every committed `runs/*.jsonl`: their ledgers were deleted when the next run started.
 - The stop landed in its moment's window, measured from the ledger's own timestamps. `before_send` means the request arrived after the stop or never arrived. `in_flight` means the request arrived before the stop and committed after it. `after_commit` means the refund committed before the stop.
+- The stored `verdict` equals `stopbench.verdict()` of the record's own fields, so one wording and one precedence hold across runners.
+- The stored `told` (what the model had for the refund call when it answered the stop) re-derives from the record's evidence through the runner's `told_from`, run in that runner's venv. `told_source` names that evidence: `context_after_run` (Pipecat), `llm_node` (LiveKit) or `server_event_order` (realtime).
 - For realtime, `read_wire` rebuilds every derived field from the stored server events.
 
 A verdict string alone is not proof. Read the agent's words in the console file too, because no code classifies what the agent said.

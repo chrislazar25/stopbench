@@ -6,7 +6,7 @@ Run from the repo root with any python3 (stdlib only):
     python3 .claude/skills/verify-stopbench/verify.py doctor
     python3 .claude/skills/verify-stopbench/verify.py ledger
     python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments in_flight --cancel true
-    python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat
+    python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat [.verify/<id>/ledger.db]
 
 Evidence goes to .verify/<id>/ (gitignored) and survives cleanup.
 """
@@ -23,11 +23,11 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 RUNNERS = {
-    "pipecat": {"script": "pipecat_run.py", "venv": ".venv", "req": "requirements.txt",
+    "pipecat": {"script": "pipecat_run.py", "module": "pipecat_run", "venv": ".venv", "req": "requirements.txt",
                 "db": "runs/ledger.db", "axis": "cancel_on_interruption", "paid": False},
-    "livekit": {"script": "livekit_run.py", "venv": ".venv-livekit", "req": "requirements-livekit.txt",
+    "livekit": {"script": "livekit_run.py", "module": "livekit_run", "venv": ".venv-livekit", "req": "requirements-livekit.txt",
                 "db": "runs/ledger-livekit.db", "axis": "commit_delay_ms", "paid": False},
-    "realtime": {"script": "realtime_run.py", "venv": ".venv-realtime", "req": "requirements-realtime.txt",
+    "realtime": {"script": "realtime_run.py", "module": "realtime_run", "venv": ".venv-realtime", "req": "requirements-realtime.txt",
                  "db": "runs/ledger-realtime.db", "axis": "async_tool_calls", "paid": True},
 }
 # Where each stop moment must land relative to the ledger, in ms from the stop. The harness
@@ -153,53 +153,71 @@ def run(name: str, extra: list[str]) -> int:
 
 
 def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = None) -> int:
-    """Each record: ledger agrees, the stop landed in its moment's window, realtime fields re-derive."""
+    """Each record: ledger agrees, the stop landed in its moment's window, the verdict follows
+    from the record, and what the model was told re-derives from the record's own evidence."""
+    sys.path.insert(0, str(ROOT))
+    from stopbench import Moment, Told, verdict
+
     r = RUNNERS[name]
-    db = db or ROOT / r["db"]
     recs = [json.loads(line) for line in open(jsonl)]
-    con = sqlite3.connect(db)
+    con = sqlite3.connect(db) if db else None
     failures = []
     cells = defaultdict(list)
     for rec in recs:
-        n = con.execute("SELECT count(*) FROM refunds WHERE refund_id = ?", (rec["refund_id"],)).fetchone()[0]
-        if n != rec["ledger_count"]:
-            failures.append(f"{rec['refund_id']}: ledger has {n}, record says {rec['ledger_count']}")
+        n = rec["ledger_count"]
+        if con:
+            n = con.execute("SELECT count(*) FROM refunds WHERE refund_id = ?", (rec["refund_id"],)).fetchone()[0]
+            if n != rec["ledger_count"]:
+                failures.append(f"{rec['refund_id']}: ledger has {n}, record says {rec['ledger_count']}")
         stop = rec.get("interrupted_at")
         if rec["moment"] in WINDOWS and stop and rec.get("tool_called", True):
             ms = lambda t: None if t is None else (t - stop) * 1000
             if not WINDOWS[rec["moment"]](ms(rec["received_at"]), ms(rec["committed_at"])):
                 failures.append(f"{rec['refund_id']}: stop outside the {rec['moment']} window")
+        expected = verdict(rec["tool_called"], n > 0, Moment(rec["moment"]), Told(rec["told"]))
+        if rec["verdict"] != expected or rec["landed"] != (n > 0):
+            failures.append(f"{rec['refund_id']}: record says {rec['verdict']!r}, the ledger and told give {expected!r}")
         cells[(rec[r["axis"]], rec["moment"])].append(rec)
-    if name == "realtime":
-        failures += rederive_realtime(jsonl)
+    failures += rederive(jsonl, name)
     lines = [f"{'axis':8} {'moment':13} {'n':>2} {'landed':>6}  verdicts"]
     for (axis, moment), rs in sorted(cells.items(), key=str):
         verdicts = dict(Counter(x["verdict"].split(":")[0] for x in rs))
         lines.append(f"{str(axis):8} {moment:13} {len(rs):>2} {sum(x['landed'] for x in rs):>6}  {verdicts}")
     lines += [f"FAIL {f}" for f in failures]
-    lines.append(f"check: {'PASS' if not failures else 'FAIL'} ({len(recs)} records, db {db})")
+    ledger = f"ledger {db}" if db else "ledger NOT checked: no db given, counts taken from the records"
+    lines.append(f"check: {'PASS' if not failures else 'FAIL'} ({len(recs)} records, {ledger})")
     report = "\n".join(lines)
     (out or evidence_dir()).joinpath(f"{jsonl.stem}.check.txt").write_text(report + "\n")
     print(report)
     return 1 if failures else 0
 
 
-def rederive_realtime(jsonl: Path) -> list[str]:
-    code = (
-        "import json, sys\n"
-        "from realtime_run import load_wire, read_wire\n"
-        "bad = 0\n"
-        "for line in open(sys.argv[1]):\n"
-        "    r = json.loads(line)\n"
-        "    reading = read_wire(load_wire(r['wire']), r['moment'] != 'none')\n"
-        "    bad += any(r[k] != v for k, v in reading.__dict__.items())\n"
-        "print(bad)\n"
-    )
-    out = subprocess.run([str(python("realtime")), "-c", code, str(jsonl)], capture_output=True, text=True)
+REDERIVE = """
+import json, sys
+from {module} import TOLD_SOURCE, told_from
+realtime = {module!r} == "realtime_run"
+if realtime:
+    from realtime_run import load_wire, read_wire
+bad = []
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    if realtime:
+        reading = read_wire(load_wire(r["wire"]), r["moment"] != "none")
+        if any(r[k] != v for k, v in reading.__dict__.items()):
+            bad.append(f"{{r['refund_id']}}: fields don't re-derive from the wire")
+    if r["told"] != told_from(r).value or r["told_source"] != TOLD_SOURCE:
+        bad.append(f"{{r['refund_id']}}: told {{r['told']!r}} doesn't follow from the record")
+print(json.dumps(bad))
+"""
+
+
+def rederive(jsonl: Path, name: str) -> list[str]:
+    """Runs in the runner's own venv, because told_from reads framework constants."""
+    code = REDERIVE.format(module=RUNNERS[name]["module"])
+    out = subprocess.run([str(python(name)), "-c", code, str(jsonl)], capture_output=True, text=True, cwd=ROOT)
     if out.returncode != 0:
-        return [f"read_wire re-derivation crashed: {out.stderr.strip()[-300:]}"]
-    bad = int(out.stdout.strip())
-    return [f"{bad} realtime record(s) don't re-derive from their wire"] if bad else []
+        return [f"re-derivation crashed: {out.stderr.strip()[-300:]}"]
+    return json.loads(out.stdout.strip().splitlines()[-1])
 
 
 def main() -> int:
@@ -211,8 +229,8 @@ def main() -> int:
             return ledger()
         case ["run", name, *extra] if name in RUNNERS:
             return run(name, extra)
-        case ["check", path, name] if name in RUNNERS:
-            return check(Path(path), name)
+        case ["check", path, name, *db] if name in RUNNERS and len(db) <= 1:
+            return check(Path(path), name, Path(db[0]) if db else None)
     print(__doc__)
     return 2
 
