@@ -27,6 +27,9 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 ## Features
 
+Driven end to end through `verify.py` on 2026-10-22: ledger and pipecat (scripted). The livekit and realtime recipes are written from the runners' code and their committed runs, and have not yet been driven through `verify.py`.
+
+
 - [Ledger](./ledger.md) covers the fake payments API: commit after hang-up and the refund lookup.
 - [Pipecat runner](./pipecat.md) covers the four moments under both `cancel_on_interruption` settings, scripted and with a real model.
 - [LiveKit runner](./livekit.md) covers the four moments at 400 ms and 6000 ms commits, scripted and with a real model.
