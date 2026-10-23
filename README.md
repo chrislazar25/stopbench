@@ -118,7 +118,7 @@ The timings line up with the other two frameworks. In the in-flight cells the le
 
 ## What this does not cover yet
 
-Real audio and voice activity detection, models other than gpt-6.1-sol and gpt-realtime-2.1, and hosted voice platforms.
+Real audio and voice activity detection, and models other than gpt-6.1-sol and gpt-realtime-2.1. Runners for four hosted platforms (Gemini Live, ElevenLabs Agents, Retell and Vapi) are in the repo and pass `verify.py` with one run per cell, but their results are not published here until each has a full 5-per-cell file in `runs/`.
 
 ## Run it
 
@@ -134,6 +134,16 @@ python3.11 -m venv .venv-livekit && .venv-livekit/bin/pip install -r requirement
 python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requirements-realtime.lock.txt
 .venv-realtime/bin/python realtime_run.py --runs 5 --out runs/mine/realtime.jsonl   # needs OPENAI_API_KEY in .env
 .venv-realtime/bin/python realtime_run.py --runs 2 --moments before_send in_flight --commit-delay-ms 6000 --out runs/mine/realtime-6000ms.jsonl
+```
+
+The four hosted-platform runners share one venv. Retell and Vapi call the tool by webhook, so those two runners open a cloudflared quick tunnel (`brew install cloudflared`, no account needed) to a local tool server.
+
+```sh
+python3.11 -m venv .venv-hosted && .venv-hosted/bin/pip install -r requirements-hosted.lock.txt
+.venv-hosted/bin/python gemini_run.py --runs 5 --out runs/mine/gemini.jsonl           # GOOGLE_API_KEY, axis --behavior
+.venv-hosted/bin/python elevenlabs_run.py --runs 5 --out runs/mine/elevenlabs.jsonl   # ELEVENLABS_API_KEY, axis --interruption-mode
+.venv-hosted/bin/python retell_run.py --runs 5 --out runs/mine/retell.jsonl           # RETELL_API_KEY, axis --speak-after-execution
+.venv-hosted/bin/python vapi_run.py --runs 5 --out runs/mine/vapi.jsonl               # VAPI_PRIVATE_KEY, axis --async-tool
 ```
 
 `ledger.py` starts as a separate process (400 ms commit delay for Pipecat, 400 and 6000 ms for LiveKit and realtime). Each run's record, with timestamps and the `git describe` of the code that produced it, is appended to the `--out` file as the run ends, and the ledger's SQLite db is written next to it. A runner refuses an `--out` that already exists, so a rerun can't overwrite published results. The default `--out` names a committed file, so the commands above write to `runs/mine/`. The realtime records also keep the server's event stream, and `realtime_run.read_wire` rebuilds every derived field from it. `stopbench.py` holds what all three runners share: the prompts, the tool timing, the four moments and the verdict. `refund.py` holds the one refund tool body that marks each moment.

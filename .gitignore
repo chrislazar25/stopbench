@@ -8,3 +8,4 @@ runs/mine/
 .venv-livekit/
 .venv-realtime/
 .verify/
+.venv-hosted/

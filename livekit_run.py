@@ -103,7 +103,7 @@ class RunResult:
 
     @property
     def verdict(self) -> str:
-        return verdict(self.tool_called, self.landed, Moment(self.moment), self.told)
+        return verdict(self.tool_called, self.ledger_count, Moment(self.moment), self.told)
 
 
 def told_from(record: dict) -> Told:
