@@ -65,10 +65,13 @@ def assert_internals():
     """A silent change here would move runs between verdicts without any error."""
     if INTERRUPTION_TIMEOUT != 5.0:
         sys.exit(f"LiveKit's INTERRUPTION_TIMEOUT is {INTERRUPTION_TIMEOUT} s; the 400/6000 ms matrix assumes 5 s.")
-    if f'call_id_suffix="{FINAL_SUFFIX}"' not in inspect.getsource(tool_executor):
+    # 1.8.8 applies the suffix in two places: the released result, and a handoff-error path.
+    if inspect.getsource(tool_executor).count(f'call_id_suffix="{FINAL_SUFFIX}"') != 2:
         sys.exit(f"tool_executor no longer names released results with {FINAL_SUFFIX!r}; followup_reply would stay empty.")
     if not hasattr(AgentSession, "_claim_user_turn"):
         sys.exit("AgentSession._claim_user_turn is gone; the stop can't be delivered like LiveKit's text input.")
+
+
 TOLD_SOURCE = "llm_node"
 
 
@@ -255,6 +258,8 @@ async def one_run(
     rows = ledger["rows"]
     agent_reply, followup_reply = split_replies(items, stopped)
     outputs = tool_outputs(items)
+    if stopped and tool_called and not any(saw_stop for saw_stop, _ in agent.contexts):
+        raise RuntimeError("no llm_node call saw the stop message, so what the model had can't be read")
     context = reply_context(agent.contexts, stopped)
     return RunResult(
         framework="livekit",
