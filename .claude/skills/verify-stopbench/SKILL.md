@@ -60,7 +60,7 @@ Proof goes to `.verify/<timestamp>/`, which is gitignored and never deleted by c
 - `<name>.console.txt` holds the runner's output, including the verdict and the agent's words for each run;
 - `<name>.jsonl` holds the records;
 - the ledger db snapshot is the payments side of the story;
-- `<name>.check.txt` holds the check's per-cell table and every failure.
+- `<name>.check.txt` holds the check's per-cell table and every failure. A standalone `check` writes it to a new `.verify/<timestamp>/` folder, never next to a committed file.
 
 `check` proves three things for each record, and exits 1 if any fails:
 

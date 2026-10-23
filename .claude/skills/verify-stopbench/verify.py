@@ -149,10 +149,10 @@ def run(name: str, extra: list[str]) -> int:
         return 1
     snapshot = out / Path(r["db"]).name
     snapshot.write_bytes((ROOT / r["db"]).read_bytes())
-    return check(jsonl, name, snapshot)
+    return check(jsonl, name, snapshot, out)
 
 
-def check(jsonl: Path, name: str, db: Path | None = None) -> int:
+def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = None) -> int:
     """Each record: ledger agrees, the stop landed in its moment's window, realtime fields re-derive."""
     r = RUNNERS[name]
     db = db or ROOT / r["db"]
@@ -179,7 +179,7 @@ def check(jsonl: Path, name: str, db: Path | None = None) -> int:
     lines += [f"FAIL {f}" for f in failures]
     lines.append(f"check: {'PASS' if not failures else 'FAIL'} ({len(recs)} records, db {db})")
     report = "\n".join(lines)
-    (jsonl.parent / f"{jsonl.stem}.check.txt").write_text(report + "\n")
+    (out or evidence_dir()).joinpath(f"{jsonl.stem}.check.txt").write_text(report + "\n")
     print(report)
     return 1 if failures else 0
 
