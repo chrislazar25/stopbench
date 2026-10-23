@@ -69,6 +69,8 @@ Proof goes to `.verify/<timestamp>-<label>-<random>/`, which is gitignored and n
 - The stored `told` (what the model had for the refund call when it answered the stop) re-derives from the record's evidence through the runner's `told_from`, run in that runner's venv. `told_source` names that evidence: `context_after_run` (Pipecat), `llm_node` (LiveKit) or `server_event_order` (realtime).
 - For realtime, `read_wire` rebuilds every derived field from the stored server events.
 
+README numbers come from `python3 tables.py <files>` (cell counts, what the model had, verdicts, ms from the stop) and `python3 tables.py --second-refund <files>`. Copy numbers from its output, never by hand.
+
 A verdict string alone is not proof. Read the agent's words in the console file too, because no code classifies what the agent said.
 
 ## Cleanup

@@ -14,7 +14,7 @@ Each run records two facts: whether the refund landed, and what the agent told t
 
 ## Results: Pipecat 1.13.0
 
-80 runs, 10 per cell. Every cell gave the same verdict all 10 times.
+80 runs, 10 per cell. Every cell gave the same verdict all 10 times. `python3 tables.py runs/pipecat.jsonl` prints the counts and times behind this table.
 
 | `cancel_on_interruption` | Stop arrives | Refund landed | Model's context says | Verdict |
 |---|---|---|---|---|
@@ -27,7 +27,7 @@ Each run records two facts: whether the refund landed, and what the agent told t
 | `False` | while the request is in flight | 10/10 | the real result | ok, told the truth |
 | `False` | after the refund is saved | 10/10 | the real result | ok, told the truth |
 
-In the in-flight cells the ledger received the request 50 ms before the stop and saved the refund 351 to 355 ms after it. In the after-saved cells it saved the refund 2 to 6 ms before the stop.
+In the in-flight cells the ledger received the request 49 to 51 ms before the stop and saved the refund 351 to 355 ms after it. In the after-saved cells it saved the refund 2 to 6 ms before the stop.
 
 These 80 runs came from the first version of `pipecat_run.py` (commit `a363faf`), where the stop was an interruption with no message after it. The current runner also sends "Wait, stop. Don't do the refund." as a user message, which starts a new LLM turn while the tool is still running. With `False`, that turn sees Pipecat's "async tool still running" note instead of the result, as in the real-model table below. An 80-run rerun of the current runner on 2026-10-22 gave the same refund count in every cell, with timings within 15 ms of these. Its verdicts matched in six of the eight cells. In the two `False` cells where the stop arrives while the tool runs (in flight, and after the refund is saved), all 20 runs gave the model the "still running" note, so they read **pending: refund landed, model told still in progress**.
 
@@ -40,7 +40,7 @@ Why, in the Pipecat 1.13.0 source:
 
 ## Results: Pipecat 1.13.0 with a real model (gpt-6.1-sol)
 
-40 runs, 5 per cell, through `OpenAIResponsesLLMService` with the model's default reasoning. The model makes the tool call itself here. The stop is an interruption followed by the user message "Wait, stop. Don't do the refund." The last column is what the agent said after the stop.
+40 runs, 5 per cell, through `OpenAIResponsesLLMService` with the model's default reasoning (`python3 tables.py runs/pipecat-gpt-6.1-sol.jsonl`). The model makes the tool call itself here. The stop is an interruption followed by the user message "Wait, stop. Don't do the refund." The last column is what the agent said after the stop.
 
 | `cancel_on_interruption` | Stop arrives | Refund landed | Agent said (one of the 5 runs) | Verdict |
 |---|---|---|---|---|
@@ -53,13 +53,13 @@ Why, in the Pipecat 1.13.0 source:
 | `False` | while the request is in flight | 5/5 | "I've already submitted the $40 refund request, and I can't cancel it from here. It's still processing, so I don't yet know whether it went through. ... The $40 refund has already been processed." | **pending: refund landed, model told still in progress**, then confirmed |
 | `False` | after the refund is saved | 5/5 | "I've already submitted the $40 refund request, and I can't stop it from here. It's still processing; I don't have a final result yet. ... The $40 refund has already been processed." | **pending: refund landed, model told still in progress**, then confirmed |
 
-Every cell gave the same verdict in all 5 runs. With the default, all 10 runs where the refund landed after a stop ended with the agent telling the caller it was canceled. With `False`, Pipecat first puts an "async tool still running" note in the context, so the agent says the refund is still processing, then confirms it once the ledger replies. All 10 in-flight and after-saved runs ended with that confirmation. In the before-send cell it says "already submitted" although the stop came 200 ms before the request left.
+Every cell gave the same verdict in all 5 runs. With the default, all 10 runs where the refund landed after a stop ended with the agent telling the caller it was canceled. With `False`, Pipecat first puts an "async tool still running" note in the context, so the agent says the refund is still processing, then confirms it once the ledger replies. All 10 in-flight and after-saved runs ended with that confirmation. In the before-send cell it says "already submitted" although the ledger received the request 201 to 211 ms after the stop.
 
 ## Results: LiveKit Agents 1.8.8
 
 LiveKit has no setting like `cancel_on_interruption`. A stop never cancels a running tool. It waits up to 5 s for the tool to finish (`INTERRUPTION_TIMEOUT` in `voice/speech_handle.py`), and the caller's stop reaches the model only after that. So the variable here is how long the ledger takes to save the refund: 400 ms (inside the 5 s wait) and 6000 ms (outlives it). The stop is delivered the way LiveKit's own text input does it: `await session.interrupt()`, then a new user turn.
 
-80 scripted runs, 10 per cell, and 40 runs with gpt-6.1-sol (`openai.responses.LLM`, `--no-chain`, see below), 5 per cell. Every cell gave the same verdict in every run, scripted and real.
+80 scripted runs, 10 per cell, and 40 runs with gpt-6.1-sol (`openai.responses.LLM`, `--no-chain`, see below), 5 per cell. Every cell gave the same verdict in every run, scripted and real. `python3 tables.py runs/livekit.jsonl runs/livekit-gpt-6.1-sol-unchained.jsonl` pools both files into the counts below.
 
 | Commit takes | Stop arrives | Refund landed | Model was given | Agent said (gpt-6.1-sol, one of the 5 runs) | Verdict |
 |---|---|---|---|---|---|
@@ -82,13 +82,13 @@ Pipecat and LiveKit fail in opposite directions. Pipecat's default stops what it
 
 This is already reported upstream as [livekit/agents#5136](https://github.com/livekit/agents/issues/5136), open since 2026-03-18, with an open fix in [#7762](https://github.com/livekit/agents/pull/7762). The issue reports duplicate entries in OpenAI's logs. The runs here add what it does to the conversation.
 
-With default settings, `livekit-plugins-openai` 1.8.8's Responses LLM chains requests with `previous_response_id`. Its follow-up request after a tool call also re-sends the `function_call` item that the previous response already holds, so the model sees the refund call twice and one result. This happens with or without a stop. In 6 baseline runs (no stop) with chaining on, 4 replies claimed a second refund, for example "Your $40 refund is confirmed. I'm sorry—I accidentally submitted the request twice, so an additional $40 refund may also be processed." With `store=False`, which turns chaining off, 0 of 6 did. The ledger had one refund in all 12 (`runs/livekit-chain-control.jsonl`). `runs/livekit-gpt-6.1-sol.jsonl` holds 40 runs with the default settings, 30 with a stop and 10 without. 17 of their replies mention a second refund request: 7 of the 10 baselines and 10 of the 30 stop runs. None of the 40 `--no-chain` runs do. A reply counts when its text contains, ignoring case, any of "twice", "two $40 refund", "second $40 refund", "second refund" or "second request". `--no-chain` gives the clean runs in the table above.
+With default settings, `livekit-plugins-openai` 1.8.8's Responses LLM chains requests with `previous_response_id`. Its follow-up request after a tool call also re-sends the `function_call` item that the previous response already holds, so the model sees the refund call twice and one result. This happens with or without a stop. In 6 baseline runs (no stop) with chaining on, 4 replies claimed a second refund, for example "Your $40 refund is confirmed. I'm sorry—I accidentally submitted the request twice, so an additional $40 refund may also be processed." With `store=False`, which turns chaining off, 0 of 6 did. The ledger had one refund in all 12 (`runs/livekit-chain-control.jsonl`). `runs/livekit-gpt-6.1-sol.jsonl` holds 40 runs with the default settings, 30 with a stop and 10 without. 17 of their replies mention a second refund request: 7 of the 10 baselines and 10 of the 30 stop runs. None of the 40 `--no-chain` runs do. A reply counts when its text contains, ignoring case, any of "twice", "two $40 refund", "second $40 refund", "second refund", "second request" or "duplicate refund". The same rule gives the 4 of 6 above. `python3 tables.py --second-refund runs/livekit-gpt-6.1-sol.jsonl runs/livekit-chain-control.jsonl` prints every count in this paragraph. `--no-chain` gives the clean runs in the table above.
 
 ## Results: OpenAI Agents SDK 0.24.0 realtime (gpt-realtime-2.1)
 
 The SDK's `RealtimeSession` never cancels a running tool, and it always sends the tool's result back with a request for a new response. What changes the outcome is the one setting that controls how tools run, `async_tool_calls`. With `True`, the default, the tool runs in the background, so the stop gets its own response right away while the refund call has no result yet. With `False`, the tool blocks the session until it returns, so the stop waits and the model answers once with the result in its conversation.
 
-40 runs, 5 per cell, with text output and a 400 ms commit. The stop is `session.interrupt()` followed by `session.send_message("Wait, stop. Don't do the refund.")`. In this text session `interrupt()` cancelled nothing: every response in all 40 runs ended `completed`. The runner records the server's own event stream, so "Model had" is read from the order in which the server added items and started responses.
+40 runs, 5 per cell, with text output and a 400 ms commit. The stop is `session.interrupt()` followed by `session.send_message("Wait, stop. Don't do the refund.")`. In this text session `interrupt()` cancelled nothing: every response in all 40 runs ended `completed`. The runner records the server's own event stream, so "Model had" is read from the order in which the server added items and started responses. `python3 tables.py runs/realtime-gpt-realtime-2.1.jsonl` prints the counts and both timing columns below.
 
 | `async_tool_calls` | Stop arrives | Refund landed | Model had, answering the stop | Agent said (one of the 5 runs) | Later, unprompted | Verdict |
 |---|---|---|---|---|---|---|
