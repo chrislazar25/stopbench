@@ -29,7 +29,7 @@ Each run records two facts: whether the refund landed, and what the agent told t
 
 In the in-flight cells the ledger received the request 50 ms before the stop and saved the refund 351 to 355 ms after it. In the after-saved cells it saved the refund 2 to 6 ms before the stop.
 
-These 80 runs came from the first version of `pipecat_run.py` (commit `a363faf`), where the stop was an interruption with no message after it. The current runner also sends "Wait, stop. Don't do the refund." as a user message, which starts a new LLM turn while the tool is still running. With `False`, that turn sees Pipecat's "async tool still running" note instead of the result, as in the real-model table below. An 80-run rerun of the current runner on 2026-10-22 gave the same verdict and refund count in every cell, with timings within 15 ms of these.
+These 80 runs came from the first version of `pipecat_run.py` (commit `a363faf`), where the stop was an interruption with no message after it. The current runner also sends "Wait, stop. Don't do the refund." as a user message, which starts a new LLM turn while the tool is still running. With `False`, that turn sees Pipecat's "async tool still running" note instead of the result, as in the real-model table below. An 80-run rerun of the current runner on 2026-10-22 gave the same refund count in every cell, with timings within 15 ms of these. Its verdicts matched in six of the eight cells. In the two `False` cells where the stop arrives while the tool runs (in flight, and after the refund is saved), all 20 runs gave the model the "still running" note, so they read **pending: refund landed, model told still in progress**.
 
 Neither setting does both jobs. The default stops what it can, then tells the model `CANCELLED` even when the refund already landed. `False` tells the truth, but a stop never stops anything.
 
@@ -50,10 +50,10 @@ Why, in the Pipecat 1.13.0 source:
 | `True` (default) | after the refund is saved | 5/5 | "Understood. The refund was canceled and has not been processed." | **wrong: refund landed, caller told no refund** |
 | `False` | never (baseline) | 5/5 | "Your $40 refund has been issued for the duplicate charge on order 1182." | ok |
 | `False` | before the request is sent | 5/5 | "I've already submitted the $40 refund request and can't cancel it from here. ... The forty-dollar refund has already been submitted." | **ignored: stop came first, refund landed anyway** |
-| `False` | while the request is in flight | 5/5 | "I've already submitted the $40 refund request, and I can't cancel it from here. ... The $40 refund has already been processed." | ok, told the truth |
-| `False` | after the refund is saved | 5/5 | "I've already submitted the $40 refund request, and I can't stop it from here. ... The $40 refund has already been processed." | ok, told the truth |
+| `False` | while the request is in flight | 5/5 | "I've already submitted the $40 refund request, and I can't cancel it from here. It's still processing, so I don't yet know whether it went through. ... The $40 refund has already been processed." | **pending: refund landed, model told still in progress**, then confirmed |
+| `False` | after the refund is saved | 5/5 | "I've already submitted the $40 refund request, and I can't stop it from here. It's still processing; I don't have a final result yet. ... The $40 refund has already been processed." | **pending: refund landed, model told still in progress**, then confirmed |
 
-Every cell gave the same verdict in all 5 runs. With the default, all 10 runs where the refund landed after a stop ended with the agent telling the caller it was canceled. With `False`, Pipecat first puts an "async tool still running" note in the context, so the agent says the refund is still processing, then confirms it once the ledger replies. In the before-send cell it says "already submitted" although the stop came 200 ms before the request left.
+Every cell gave the same verdict in all 5 runs. With the default, all 10 runs where the refund landed after a stop ended with the agent telling the caller it was canceled. With `False`, Pipecat first puts an "async tool still running" note in the context, so the agent says the refund is still processing, then confirms it once the ledger replies. All 10 in-flight and after-saved runs ended with that confirmation. In the before-send cell it says "already submitted" although the stop came 200 ms before the request left.
 
 ## Results: LiveKit Agents 1.8.8
 

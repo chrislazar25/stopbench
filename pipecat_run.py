@@ -36,6 +36,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.aggregators import async_tool_messages
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection
@@ -53,9 +54,11 @@ from stopbench import (
     USER_STOP,
     Marks,
     Moment,
+    Told,
     free_port,
     load_env,
     reach_moment,
+    verdict,
 )
 
 COMMIT_DELAY_MS = 400
@@ -83,24 +86,31 @@ class RunResult:
         return self.ledger_count > 0
 
     @property
-    def told_cancelled(self) -> bool:
-        return self.tool_result_in_context is not None and "CANCEL" in self.tool_result_in_context.upper()
+    def told(self) -> Told:
+        return told_from(self.__dict__)
 
     @property
     def verdict(self) -> str:
-        if not self.tool_called:
-            return "NO_CALL: model did not call issue_refund"
-        if self.landed and self.told_cancelled:
-            return "LIE: refund landed, model told cancelled"
-        if self.landed and self.tool_result_in_context is None:
-            return "BLIND: refund landed, model told nothing"
-        if self.landed and self.moment == Moment.BEFORE_SEND.value:
-            return "IGNORED: stop came before the request, refund landed anyway"
-        if self.landed:
-            return "ok: landed, model told landed"
-        if self.told_cancelled:
-            return "ok: stopped, model told cancelled"
-        return "BLIND: nothing landed, model told nothing"
+        return verdict(self.tool_called, self.landed, Moment(self.moment), self.told)
+
+
+# Read after the run ends. Pipecat writes the result over the tool message only while
+# the conversation hasn't moved on (llm_response_universal.py, _handle_function_call_finished).
+# Once the stop starts a new turn, the result goes in a separate message, so the tool
+# message still holds what the model had when it answered the stop.
+TOLD_SOURCE = "context_after_run"
+
+
+def told_from(record: dict) -> Told:
+    text = record["tool_result_in_context"]
+    if text is None:
+        return Told.NOTHING
+    async_tool = async_tool_messages.parse_message({"role": "tool", "content": text})
+    if text == "IN_PROGRESS" or (async_tool and async_tool.kind != "final"):
+        return Told.PLACEHOLDER
+    if "CANCEL" in text.upper():
+        return Told.CANCELLED
+    return Told.RESULT
 
 
 class ScriptedLLM(LLMService):
@@ -321,7 +331,10 @@ async def main():
 
     with open(out, "w") as f:
         for r in results:
-            f.write(json.dumps({**asdict(r), "landed": r.landed, "verdict": r.verdict}) + "\n")
+            f.write(json.dumps({
+                **asdict(r), "landed": r.landed, "told": r.told.value, "told_source": TOLD_SOURCE,
+                "verdict": r.verdict,
+            }) + "\n")
     print(f"wrote {len(results)} runs to {out}")
 
 
