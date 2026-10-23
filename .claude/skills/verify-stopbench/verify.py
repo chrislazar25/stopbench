@@ -24,11 +24,11 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 RUNNERS = {
-    "pipecat": {"script": "pipecat_run.py", "module": "pipecat_run", "venv": ".venv", "req": "requirements.txt",
+    "pipecat": {"script": "pipecat_run.py", "module": "pipecat_run", "venv": ".venv", "req": "requirements.txt", "lock": "requirements.lock.txt",
                 "axis": "cancel_on_interruption", "paid": False},
-    "livekit": {"script": "livekit_run.py", "module": "livekit_run", "venv": ".venv-livekit", "req": "requirements-livekit.txt",
+    "livekit": {"script": "livekit_run.py", "module": "livekit_run", "venv": ".venv-livekit", "req": "requirements-livekit.txt", "lock": "requirements-livekit.lock.txt",
                 "axis": "commit_delay_ms", "paid": False},
-    "realtime": {"script": "realtime_run.py", "module": "realtime_run", "venv": ".venv-realtime", "req": "requirements-realtime.txt",
+    "realtime": {"script": "realtime_run.py", "module": "realtime_run", "venv": ".venv-realtime", "req": "requirements-realtime.txt", "lock": "requirements-realtime.lock.txt",
                  "axis": "async_tool_calls", "paid": True},
 }
 # Where each stop moment must land relative to the ledger, in ms from the stop. The harness
@@ -70,6 +70,13 @@ def doctor() -> int:
             print(f"{name:9} {pkg}=={want}: {status}")
             if status != "ok":
                 problems.append(f"{name}: {pkg} {status}")
+        frozen = set(subprocess.run([py, "-m", "pip", "freeze"], capture_output=True, text=True).stdout.split())
+        locked = set((ROOT / r["lock"]).read_text().split())
+        if frozen != locked:
+            drift = sorted(f"+{p}" for p in frozen - locked) + sorted(f"-{p}" for p in locked - frozen)
+            problems.append(f"{name}: venv differs from {r['lock']}: {' '.join(drift)}")
+        else:
+            print(f"{name:9} matches {r['lock']} ({len(locked)} packages)")
     names = env_names()
     print(f"keys in .env: {sorted(names) or 'none'}")
     if "OPENAI_API_KEY" not in names:

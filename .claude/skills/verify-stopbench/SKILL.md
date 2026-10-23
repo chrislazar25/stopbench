@@ -21,9 +21,9 @@ python3 .claude/skills/verify-stopbench/verify.py check <file.jsonl> <pipecat|li
 There is no server to keep alive. Launch means building each runner's venv once. Python 3.11 is required.
 
 ```sh
-python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
-python3.11 -m venv .venv-livekit && .venv-livekit/bin/pip install -r requirements-livekit.txt
-python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requirements-realtime.txt
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.lock.txt
+python3.11 -m venv .venv-livekit && .venv-livekit/bin/pip install -r requirements-livekit.lock.txt
+python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requirements-realtime.lock.txt
 ```
 
 Each `run` starts its own `ledger.py` on a free port and stops it when the matrix ends. The runner is ready when it prints its first result line. The realtime runner and every `--llm openai` run need `OPENAI_API_KEY` in `.env`, and they spend money (cents per run).
@@ -34,6 +34,7 @@ Run `verify.py doctor` first, and again whenever anything looks off. It is read-
 
 - the current directory is the repo root;
 - each venv exists and has the exact pinned versions from its requirements file;
+- each venv's `pip freeze` equals its committed lock file (`requirements*.lock.txt`), so results come from the environment the repo records;
 - which key names `.env` holds (names only, never values).
 
 `doctor: OK` means every instance is worth driving.

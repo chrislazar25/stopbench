@@ -123,15 +123,15 @@ Real audio and voice activity detection, models other than gpt-6.1-sol and gpt-r
 ## Run it
 
 ```sh
-python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.lock.txt
 .venv/bin/python pipecat_run.py --runs 10
 .venv/bin/python pipecat_run.py --llm openai --runs 5   # needs OPENAI_API_KEY in .env (see .env.example)
 
-python3.11 -m venv .venv-livekit && .venv-livekit/bin/pip install -r requirements-livekit.txt
+python3.11 -m venv .venv-livekit && .venv-livekit/bin/pip install -r requirements-livekit.lock.txt
 .venv-livekit/bin/python livekit_run.py --runs 10
 .venv-livekit/bin/python livekit_run.py --llm openai --runs 5 --no-chain
 
-python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requirements-realtime.txt
+python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requirements-realtime.lock.txt
 .venv-realtime/bin/python realtime_run.py --runs 5   # needs OPENAI_API_KEY in .env
 .venv-realtime/bin/python realtime_run.py --runs 2 --moments before_send in_flight --commit-delay-ms 6000 --out runs/realtime-gpt-realtime-2.1-6000ms.jsonl
 ```
