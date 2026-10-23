@@ -4,9 +4,13 @@ conflict, and every runner imports this file.
 
 import asyncio
 import enum
+import json
 import os
 import socket
-from dataclasses import dataclass, field
+import subprocess
+import sys
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 PREP_S = 0.2
@@ -102,3 +106,53 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+@contextmanager
+def ledger(db: Path, commit_delay_ms: int):
+    """Runs ledger.py as its own process, like a payments provider, and yields its port."""
+    port = free_port()
+    proc = subprocess.Popen(
+        [sys.executable, "ledger.py", "--port", str(port), "--db", str(db), "--commit-delay-ms", str(commit_delay_ms)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        ready = proc.stdout.readline()
+        if not ready.startswith("ledger listening"):
+            raise RuntimeError(f"ledger.py did not start (said {ready!r})")
+        yield port
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+def git_version() -> str:
+    out = subprocess.run(["git", "describe", "--always", "--dirty"], capture_output=True, text=True)
+    return out.stdout.strip() or "unknown"
+
+
+class Results:
+    """One JSON line per run, appended as each run ends, so a crash keeps the runs before it.
+    Never overwrites: committed results are evidence. The ledger db sits next to the file.
+    """
+
+    def __init__(self, out: Path, told_source: str):
+        if out.exists():
+            sys.exit(f"{out} already exists. Runners never overwrite results; pass a new --out.")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        self.out = out
+        self.db = out.with_suffix(".db")
+        self.db.unlink(missing_ok=True)
+        self.told_source = told_source
+        self.git = git_version()
+        self.count = 0
+
+    def add(self, result) -> None:
+        record = {
+            **asdict(result), "landed": result.landed, "told": result.told.value,
+            "told_source": self.told_source, "verdict": result.verdict, "git": self.git,
+        }
+        with self.out.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+        self.count += 1

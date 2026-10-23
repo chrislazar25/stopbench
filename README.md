@@ -136,7 +136,7 @@ python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requireme
 .venv-realtime/bin/python realtime_run.py --runs 2 --moments before_send in_flight --commit-delay-ms 6000 --out runs/realtime-gpt-realtime-2.1-6000ms.jsonl
 ```
 
-`ledger.py` starts as a separate process (400 ms commit delay for Pipecat, 400 and 6000 ms for LiveKit and realtime). Each run's record, with timestamps, goes to `runs/`. The realtime records also keep the server's event stream, and `realtime_run.read_wire` rebuilds every derived field from it. `stopbench.py` holds what all three runners share: the prompts, the tool timing, the four moments and the verdict. `refund.py` holds the one refund tool body that marks each moment.
+`ledger.py` starts as a separate process (400 ms commit delay for Pipecat, 400 and 6000 ms for LiveKit and realtime). Each run's record, with timestamps and the `git describe` of the code that produced it, is appended to the `--out` file as the run ends, and the ledger's SQLite db is written next to it. A runner refuses an `--out` that already exists, so a rerun can't overwrite published results. The default `--out` names a committed file, so pass your own, such as `--out runs/mine/pipecat.jsonl`. The realtime records also keep the server's event stream, and `realtime_run.read_wire` rebuilds every derived field from it. `stopbench.py` holds what all three runners share: the prompts, the tool timing, the four moments and the verdict. `refund.py` holds the one refund tool body that marks each moment.
 
 ## Related
 

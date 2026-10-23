@@ -34,14 +34,13 @@ Run `verify.py doctor` first, and again whenever anything looks off. It is read-
 
 - the current directory is the repo root;
 - each venv exists and has the exact pinned versions from its requirements file;
-- no runner of the same kind is already running;
 - which key names `.env` holds (names only, never values).
 
 `doctor: OK` means every instance is worth driving.
 
 ## Drive
 
-`verify.py run <name> [flags]` runs the runner with `--runs 1` and your flags, writes to `.verify/<timestamp>/<name>.jsonl`, saves the console output, snapshots that runner's ledger db, then runs `check`. Pass the runner's own flags to pick cells:
+`verify.py run <name> [flags]` runs the runner with `--runs 1` and your flags, writes to `.verify/<timestamp>-<name>-<random>/<name>.jsonl` with the runner's ledger db beside it as `<name>.db`, saves the console output, then runs `check`. Pass the runner's own flags to pick cells:
 
 | Runner | Cell flags | Cost |
 |---|---|---|
@@ -55,16 +54,16 @@ The feature map in `features/` has the recipe for each one. Start with `features
 
 ## Evidence
 
-Proof goes to `.verify/<timestamp>/`, which is gitignored and never deleted by cleanup:
+Proof goes to `.verify/<timestamp>-<label>-<random>/`, which is gitignored and never deleted by cleanup:
 
 - `<name>.console.txt` holds the runner's output, including the verdict and the agent's words for each run;
 - `<name>.jsonl` holds the records;
-- the ledger db snapshot is the payments side of the story;
+- `<name>.db` is the ledger the runner wrote, the payments side of the story;
 - `<name>.check.txt` holds the check's per-cell table and every failure. A standalone `check` writes it to a new `.verify/<timestamp>/` folder, never next to a committed file.
 
 `check` proves these for each record, and exits 1 if any fails:
 
-- The ledger's row count for the record's `refund_id` equals `ledger_count`. This needs the ledger db, which `run` passes on its own. A standalone `check` without a db prints `ledger NOT checked`, and that is the honest state of every committed `runs/*.jsonl`: their ledgers were deleted when the next run started.
+- The ledger's row count for the record's `refund_id` equals `ledger_count`. This needs the ledger db, which `run` passes on its own. A standalone `check` uses the `.db` next to the jsonl when there is one. Without one it prints `ledger NOT checked`, and that is the honest state of every committed `runs/*.jsonl`: their ledgers were deleted when the next run started.
 - The stop landed in its moment's window, measured from the ledger's own timestamps. `before_send` means the request arrived after the stop or never arrived. `in_flight` means the request arrived before the stop and committed after it. `after_commit` means the refund committed before the stop.
 - The stored `verdict` equals `stopbench.verdict()` of the record's own fields, so one wording and one precedence hold across runners.
 - The stored `told` (what the model had for the refund call when it answered the stop) re-derives from the record's evidence through the runner's `told_from`, run in that runner's venv. `told_source` names that evidence: `context_after_run` (Pipecat), `llm_node` (LiveKit) or `server_event_order` (realtime).
@@ -74,8 +73,8 @@ A verdict string alone is not proof. Read the agent's words in the console file 
 
 ## Cleanup
 
-Each runner terminates the ledger it started. `verify.py ledger` terminates and waits for the one it started. Never kill ledgers or runners by name: another session may be mid-matrix. Each runner deletes its own `runs/ledger*.db` at start, which is why `doctor` and `run` refuse while a runner of the same kind is running. Delete old `.verify/` folders by hand when you no longer need them.
+Each runner terminates and waits for the ledger it started, and a ledger exits on its own within 0.5 s if its runner dies without cleanup. Never kill ledgers or runners by name: another session may be mid-matrix. Delete old `.verify/` folders by hand when you no longer need them.
 
 ## Isolation
 
-Different runners can run side by side, since each has its own venv, ledger port and db. Two runs of the same runner cannot: the second deletes the first's ledger db. Never pass `--out` pointing at a committed `runs/*.jsonl`, because the runners overwrite the file.
+Any runs can go side by side, including two of the same runner: each run gets its own ledger port, and its ledger db is named after its `--out`. A runner refuses an `--out` that already exists, so it can't overwrite committed results.

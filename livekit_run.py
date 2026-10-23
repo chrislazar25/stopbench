@@ -19,14 +19,12 @@ commit delay instead: 400 ms finishes inside that window, 6000 ms outlives it.
 
 import argparse
 import asyncio
-import json
 import logging
 import os
-import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 
@@ -46,8 +44,9 @@ from stopbench import (
     USER_STOP,
     Marks,
     Moment,
+    Results,
     Told,
-    free_port,
+    ledger,
     load_env,
     reach_moment,
     verdict,
@@ -254,17 +253,6 @@ async def one_run(
     )
 
 
-def start_ledger(delay_ms: int) -> tuple[subprocess.Popen, int]:
-    port = free_port()
-    ledger = subprocess.Popen(
-        [sys.executable, "ledger.py", "--port", str(port), "--db", "runs/ledger-livekit.db",
-         "--commit-delay-ms", str(delay_ms)],
-        stdout=subprocess.PIPE,
-    )
-    ledger.stdout.readline()
-    return ledger, port
-
-
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=10)
@@ -285,31 +273,18 @@ async def main():
 
     logging.basicConfig(level=logging.WARNING)
     lk_version = version("livekit-agents")
-    Path("runs").mkdir(exist_ok=True)
-    Path("runs/ledger-livekit.db").unlink(missing_ok=True)
-
-    results = []
+    results = Results(Path(out), TOLD_SOURCE)
     for delay_ms in args.commit_delay_ms:
-        ledger, port = start_ledger(delay_ms)
-        try:
+        with ledger(results.db, delay_ms) as port:
             for moment in [Moment(m) for m in args.moments]:
                 for run in range(args.runs):
                     result = await one_run(
                         port, moment, delay_ms, run, lk_version, args.llm, args.model, not args.no_chain
                     )
-                    results.append(result)
+                    results.add(result)
                     reply = f'  agent: "{result.agent_reply}"' if args.llm != "scripted" else ""
                     print(f"delay={delay_ms:<5} {moment.value:12} #{run}  {result.verdict}{reply}", flush=True)
-        finally:
-            ledger.terminate()
-
-    with open(out, "w") as f:
-        for r in results:
-            f.write(json.dumps({
-                **asdict(r), "landed": r.landed, "told": r.told.value, "told_source": TOLD_SOURCE,
-                "verdict": r.verdict,
-            }) + "\n")
-    print(f"wrote {len(results)} runs to {out}")
+    print(f"wrote {results.count} runs to {out}")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@
 
 Preconditions:
 
-- `verify.py doctor` prints `doctor: OK`, with no `livekit_run.py` running.
+- `verify.py doctor` prints `doctor: OK`.
 
 - **Stop before the request, 400 ms.** Run `python3 .claude/skills/verify-stopbench/verify.py run livekit --moments before_send --commit-delay-ms 400`. The console shows `IGNORED`. In `check.txt` the window passes, because the request reached the ledger about 200 ms after the stop.
 - **Placeholder, 6000 ms.** Run `python3 .claude/skills/verify-stopbench/verify.py run livekit --moments in_flight --commit-delay-ms 6000`. The console shows `PENDING: refund landed, model told still in progress`. It takes about 8 s and logs `speech not done in time after interruption`, which is LiveKit's own 5 s timeout firing.
