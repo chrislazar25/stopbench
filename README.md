@@ -29,6 +29,8 @@ Each run records two facts: whether the refund landed, and what the agent told t
 
 In the in-flight cells the ledger received the request 50 ms before the stop and saved the refund 351 to 355 ms after it. In the after-saved cells it saved the refund 2 to 6 ms before the stop.
 
+These 80 runs came from the first version of `pipecat_run.py` (commit `a363faf`), where the stop was an interruption with no message after it. The current runner also sends "Wait, stop. Don't do the refund." as a user message, which starts a new LLM turn while the tool is still running. With `False`, that turn sees Pipecat's "async tool still running" note instead of the result, as in the real-model table below. An 80-run rerun of the current runner on 2026-10-22 gave the same verdict and refund count in every cell, with timings within 15 ms of these.
+
 Neither setting does both jobs. The default stops what it can, then tells the model `CANCELLED` even when the refund already landed. `False` tells the truth, but a stop never stops anything.
 
 Why, in the Pipecat 1.13.0 source:
@@ -38,7 +40,7 @@ Why, in the Pipecat 1.13.0 source:
 
 ## Results: Pipecat 1.13.0 with a real model (gpt-6.1-sol)
 
-40 runs, 5 per cell, through `OpenAIResponsesLLMService` with the model's default reasoning. The model makes the tool call itself here. The stop is the same text message as above. The last column is what the agent said after the stop.
+40 runs, 5 per cell, through `OpenAIResponsesLLMService` with the model's default reasoning. The model makes the tool call itself here. The stop is an interruption followed by the user message "Wait, stop. Don't do the refund." The last column is what the agent said after the stop.
 
 | `cancel_on_interruption` | Stop arrives | Refund landed | Agent said (one of the 5 runs) | Verdict |
 |---|---|---|---|---|
