@@ -14,7 +14,7 @@ Each run records two facts: whether the refund landed, and what the agent told t
 
 ## Results: Pipecat 1.13.0
 
-80 runs, 10 per cell. Every cell gave the same verdict all 10 times. `python3 tables.py runs/pipecat.jsonl` prints the counts and times behind this table.
+80 scripted runs, 10 per cell, from the current runner on 2026-10-22. Every cell gave the same verdict all 10 times. The stop is an interruption followed by the user message "Wait, stop. Don't do the refund.", which starts a new LLM turn while the tool is still running. The table shows what that turn's context held for the refund call. `python3 tables.py runs/pipecat-rerun-2026-10-22.jsonl` prints the counts and times behind this table.
 
 | `cancel_on_interruption` | Stop arrives | Refund landed | Model's context says | Verdict |
 |---|---|---|---|---|
@@ -23,15 +23,15 @@ Each run records two facts: whether the refund landed, and what the agent told t
 | `True` (default) | while the request is in flight | 10/10 | `CANCELLED` | **wrong: refund landed, model told cancelled** |
 | `True` (default) | after the refund is saved | 10/10 | `CANCELLED` | **wrong: refund landed, model told cancelled** |
 | `False` | never (baseline) | 10/10 | the real result | ok |
-| `False` | before the request is sent | 10/10 | the real result | **ignored: stop came first, refund landed anyway** |
-| `False` | while the request is in flight | 10/10 | the real result | ok, told the truth |
-| `False` | after the refund is saved | 10/10 | the real result | ok, told the truth |
+| `False` | before the request is sent | 10/10 | "async tool still running" | **ignored: stop came first, refund landed anyway** |
+| `False` | while the request is in flight | 10/10 | "async tool still running" | **pending: refund landed, model told still in progress** |
+| `False` | after the refund is saved | 10/10 | "async tool still running" | **pending: refund landed, model told still in progress** |
 
-In the in-flight cells the ledger received the request 49 to 51 ms before the stop and saved the refund 351 to 355 ms after it. In the after-saved cells it saved the refund 2 to 6 ms before the stop.
+In the in-flight cells the ledger received the request 50 to 52 ms before the stop and saved the refund 349 to 360 ms after it. In the after-saved cells it saved the refund 3 to 5 ms before the stop.
 
-These 80 runs came from the first version of `pipecat_run.py` (commit `a363faf`), where the stop was an interruption with no message after it. The current runner also sends "Wait, stop. Don't do the refund." as a user message, which starts a new LLM turn while the tool is still running. With `False`, that turn sees Pipecat's "async tool still running" note instead of the result, as in the real-model table below. An 80-run rerun of the current runner on 2026-10-22 (`runs/pipecat-rerun-2026-10-22.jsonl`) gave the same refund count in every cell, with timings within 15 ms of these. Its verdicts matched in six of the eight cells. In the two `False` cells where the stop arrives while the tool runs (in flight, and after the refund is saved), all 20 runs gave the model the "still running" note, so they read **pending: refund landed, model told still in progress**.
+The first version of `pipecat_run.py` (commit `a363faf`, 80 runs in `runs/pipecat.jsonl`) sent the interruption with no message after it, so no new turn started while the tool ran. Its refund counts match this table in every cell. In its three `False` cells with a stop, the context held the real result, since no new turn started. Before-send still reads ignored, and in-flight and after-saved read ok.
 
-Neither setting does both jobs. The default stops what it can, then tells the model `CANCELLED` even when the refund already landed. `False` tells the truth, but a stop never stops anything.
+Neither setting does both jobs. The default stops what it can, then tells the model `CANCELLED` even when the refund already landed. `False` never claims a cancel, but a stop never stops anything.
 
 Why, in the Pipecat 1.13.0 source:
 
