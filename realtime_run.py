@@ -238,6 +238,11 @@ def told_from(record: dict) -> Told:
     return Told.RESULT if record["reply_context"] else Told.NOTHING
 
 
+def rederive(record: dict) -> dict:
+    """The derived fields, rebuilt from the evidence the record stores."""
+    return asdict(read_wire(load_wire(record["wire"]), record["moment"] != Moment.NONE.value))
+
+
 @dataclass
 class RunResult:
     framework: str
@@ -271,7 +276,7 @@ class RunResult:
 
     @property
     def verdict(self) -> str:
-        return verdict(self.tool_called, self.landed, Moment(self.moment), self.told)
+        return verdict(self.tool_called, self.ledger_count, Moment(self.moment), self.told)
 
 
 def refund_tool(url: str, refund_id: str, marks: Marks) -> FunctionTool:
