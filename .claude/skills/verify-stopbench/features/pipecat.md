@@ -16,7 +16,7 @@
 
 Preconditions:
 
-- `verify.py doctor` prints `doctor: OK`, with no `pipecat_run.py` running.
+- `verify.py doctor` prints `doctor: OK`.
 
 - **Default setting, three stops.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments before_send in_flight after_commit --cancel true`. The console shows `ok: stopped` for before_send and `LIE: refund landed, model told cancelled` for the other two.
 - **No-cancel setting.** Run `python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments before_send in_flight --cancel false`. before_send shows `IGNORED`, in_flight shows `PENDING: refund landed, model told still in progress`, and the refund lands in both.

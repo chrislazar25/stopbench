@@ -6,7 +6,7 @@ Run from the repo root with any python3 (stdlib only):
     python3 .claude/skills/verify-stopbench/verify.py doctor
     python3 .claude/skills/verify-stopbench/verify.py ledger
     python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments in_flight --cancel true
-    python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat [.verify/<id>/ledger.db]
+    python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat [.verify/<id>/pipecat.db]
 
 Evidence goes to .verify/<id>/ (gitignored) and survives cleanup.
 """
@@ -16,6 +16,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from collections import Counter, defaultdict
@@ -23,12 +24,12 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 RUNNERS = {
-    "pipecat": {"script": "pipecat_run.py", "module": "pipecat_run", "venv": ".venv", "req": "requirements.txt",
-                "db": "runs/ledger.db", "axis": "cancel_on_interruption", "paid": False},
-    "livekit": {"script": "livekit_run.py", "module": "livekit_run", "venv": ".venv-livekit", "req": "requirements-livekit.txt",
-                "db": "runs/ledger-livekit.db", "axis": "commit_delay_ms", "paid": False},
-    "realtime": {"script": "realtime_run.py", "module": "realtime_run", "venv": ".venv-realtime", "req": "requirements-realtime.txt",
-                 "db": "runs/ledger-realtime.db", "axis": "async_tool_calls", "paid": True},
+    "pipecat": {"script": "pipecat_run.py", "module": "pipecat_run", "venv": ".venv", "req": "requirements.txt", "lock": "requirements.lock.txt",
+                "axis": "cancel_on_interruption", "paid": False},
+    "livekit": {"script": "livekit_run.py", "module": "livekit_run", "venv": ".venv-livekit", "req": "requirements-livekit.txt", "lock": "requirements-livekit.lock.txt",
+                "axis": "commit_delay_ms", "paid": False},
+    "realtime": {"script": "realtime_run.py", "module": "realtime_run", "venv": ".venv-realtime", "req": "requirements-realtime.txt", "lock": "requirements-realtime.lock.txt",
+                 "axis": "async_tool_calls", "paid": True},
 }
 # Where each stop moment must land relative to the ledger, in ms from the stop. The harness
 # builds these windows (stopbench.py), so a run outside one measured the wrong moment.
@@ -41,11 +42,6 @@ WINDOWS = {
 
 def python(name: str) -> Path:
     return ROOT / RUNNERS[name]["venv"] / "bin" / "python"
-
-
-def running(script: str) -> list[str]:
-    out = subprocess.run(["pgrep", "-fl", script], capture_output=True, text=True).stdout
-    return [line for line in out.splitlines() if "verify.py" not in line and "pgrep" not in line]
 
 
 def env_names() -> set[str]:
@@ -74,9 +70,13 @@ def doctor() -> int:
             print(f"{name:9} {pkg}=={want}: {status}")
             if status != "ok":
                 problems.append(f"{name}: {pkg} {status}")
-        busy = running(r["script"])
-        if busy:
-            problems.append(f"{name}: already running, don't drive it now: {busy}")
+        frozen = set(subprocess.run([py, "-m", "pip", "freeze"], capture_output=True, text=True).stdout.split())
+        locked = set((ROOT / r["lock"]).read_text().split())
+        if frozen != locked:
+            drift = sorted(f"+{p}" for p in frozen - locked) + sorted(f"-{p}" for p in locked - frozen)
+            problems.append(f"{name}: venv differs from {r['lock']}: {' '.join(drift)}")
+        else:
+            print(f"{name:9} matches {r['lock']} ({len(locked)} packages)")
     names = env_names()
     print(f"keys in .env: {sorted(names) or 'none'}")
     if "OPENAI_API_KEY" not in names:
@@ -87,15 +87,14 @@ def doctor() -> int:
     return 1 if problems else 0
 
 
-def evidence_dir() -> Path:
-    d = ROOT / ".verify" / time.strftime("%Y%m%d-%H%M%S")
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def evidence_dir(label: str) -> Path:
+    (ROOT / ".verify").mkdir(exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"{time.strftime('%Y%m%d-%H%M%S')}-{label}-", dir=ROOT / ".verify"))
 
 
 def ledger() -> int:
     """Start our own ledger, POST a refund and hang up mid-commit, then check it committed."""
-    out = evidence_dir()
+    out = evidence_dir("ledger")
     db = out / "ledger.db"
     sys.path.insert(0, str(ROOT))
     from stopbench import free_port
@@ -132,12 +131,9 @@ def ledger() -> int:
 
 def run(name: str, extra: list[str]) -> int:
     r = RUNNERS[name]
-    if running(r["script"]):
-        print(f"FAIL {r['script']} is already running. It deletes {r['db']} at start, so a second run would wipe its ledger.")
-        return 1
     if r["paid"] or "--llm" in extra:
         print("note: this calls a paid API")
-    out = evidence_dir()
+    out = evidence_dir(name)
     jsonl = out / f"{name}.jsonl"
     cmd = [str(python(name)), r["script"], "--runs", "1", *extra, "--out", str(jsonl)]
     print("$ " + " ".join(cmd))
@@ -147,19 +143,17 @@ def run(name: str, extra: list[str]) -> int:
     if code != 0:
         print(f"FAIL runner exited {code}")
         return 1
-    snapshot = out / Path(r["db"]).name
-    snapshot.write_bytes((ROOT / r["db"]).read_bytes())
-    return check(jsonl, name, snapshot, out)
+    return check(jsonl, name, jsonl.with_suffix(".db"), out)
 
 
 def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = None) -> int:
-    """Each record: ledger agrees, the stop landed in its moment's window, the verdict follows
-    from the record, and what the model was told re-derives from the record's own evidence."""
     sys.path.insert(0, str(ROOT))
     from stopbench import Moment, Told, verdict
 
     r = RUNNERS[name]
     recs = [json.loads(line) for line in open(jsonl)]
+    if db is None and jsonl.with_suffix(".db").exists():
+        db = jsonl.with_suffix(".db")
     con = sqlite3.connect(db) if db else None
     failures = []
     cells = defaultdict(list)
@@ -187,7 +181,7 @@ def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = Non
     ledger = f"ledger {db}" if db else "ledger NOT checked: no db given, counts taken from the records"
     lines.append(f"check: {'PASS' if not failures else 'FAIL'} ({len(recs)} records, {ledger})")
     report = "\n".join(lines)
-    (out or evidence_dir()).joinpath(f"{jsonl.stem}.check.txt").write_text(report + "\n")
+    (out or evidence_dir(f"check-{name}")).joinpath(f"{jsonl.stem}.check.txt").write_text(report + "\n")
     print(report)
     return 1 if failures else 0
 
@@ -212,7 +206,7 @@ print(json.dumps(bad))
 
 
 def rederive(jsonl: Path, name: str) -> list[str]:
-    """Runs in the runner's own venv, because told_from reads framework constants."""
+    """Runs in the runner's venv: importing the runner imports its framework."""
     code = REDERIVE.format(module=RUNNERS[name]["module"])
     out = subprocess.run([str(python(name)), "-c", code, str(jsonl)], capture_output=True, text=True, cwd=ROOT)
     if out.returncode != 0:

@@ -16,7 +16,7 @@
 
 Preconditions:
 
-- `verify.py doctor` prints `doctor: OK`, with no `realtime_run.py` running.
+- `verify.py doctor` prints `doctor: OK`.
 - `.env` holds `OPENAI_API_KEY`. Every run here is paid.
 
 - **Blind reply, then a second one.** Run `python3 .claude/skills/verify-stopbench/verify.py run realtime --moments in_flight --async-tools true`. The console shows `BLIND: refund landed, model told nothing`, an `agent:` line and a `later:` line.

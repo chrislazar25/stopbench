@@ -22,7 +22,7 @@ Preconditions:
 
 - **Hang up mid-commit.** Run `python3 .claude/skills/verify-stopbench/verify.py ledger`. The output shows `POST hung up after 0.1 s: TimeoutError`.
 - **Look the refund up.** The same command GETs `/refunds/verify-hangup`. The output shows `"count": 1` with `committed_at` about 400 ms after `received_at`.
-- **Proof.** `ledger: PASS (committed although the client hung up)`, and `.verify/<timestamp>/ledger.txt` plus `ledger.db` hold the same facts.
+- **Proof.** `ledger: PASS (committed although the client hung up)`, and `.verify/<timestamp>-ledger-<random>/ledger.txt` plus `ledger.db` hold the same facts.
 
 ## Gotchas
 

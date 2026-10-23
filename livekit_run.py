@@ -19,20 +19,21 @@ commit delay instead: 400 ms finishes inside that window, 6000 ms outlives it.
 
 import argparse
 import asyncio
-import json
+import inspect
 import logging
 import os
-import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 
 from livekit.agents import Agent, AgentSession, function_tool, llm
 from livekit.agents.utils import http_context
+from livekit.agents.voice import tool_executor
 from livekit.agents.voice.generation import _RUNNING_TOOL_PLACEHOLDER
+from livekit.agents.voice.speech_handle import INTERRUPTION_TIMEOUT
 
 import refund
 from stopbench import (
@@ -46,8 +47,9 @@ from stopbench import (
     USER_STOP,
     Marks,
     Moment,
+    Results,
     Told,
-    free_port,
+    ledger,
     load_env,
     reach_moment,
     verdict,
@@ -55,7 +57,18 @@ from stopbench import (
 
 SCRIPTED_REPLY = "Okay."
 FINAL_SUFFIX = "_final"
-# Snapshotted in llm_node: the second call answers the stop, or with no stop, the tool's result.
+
+
+def assert_internals():
+    if INTERRUPTION_TIMEOUT != 5.0:
+        sys.exit(f"LiveKit's INTERRUPTION_TIMEOUT is {INTERRUPTION_TIMEOUT} s; the 400/6000 ms matrix assumes 5 s.")
+    # 1.8.8 applies the suffix in two places: the released result, and a handoff-error path.
+    if inspect.getsource(tool_executor).count(f'call_id_suffix="{FINAL_SUFFIX}"') != 2:
+        sys.exit(f"tool_executor no longer names released results with {FINAL_SUFFIX!r}; followup_reply would stay empty.")
+    if not hasattr(AgentSession, "_claim_user_turn"):
+        sys.exit("AgentSession._claim_user_turn is gone; the stop can't be delivered like LiveKit's text input.")
+
+
 TOLD_SOURCE = "llm_node"
 
 
@@ -107,7 +120,7 @@ class RefundAgent(Agent):
         self._marks = marks
         self._scripted = scripted
         self._called = False
-        self.contexts: list[list[str]] = []
+        self.contexts: list[tuple[bool, list[str]]] = []
 
     @function_tool(description=TOOL_DESCRIPTION)
     async def issue_refund(self, amount_cents: int) -> dict:
@@ -120,7 +133,7 @@ class RefundAgent(Agent):
     async def llm_node(self, chat_ctx, tools, model_settings):
         # LiveKit injects "still in progress" outputs into this ctx without persisting them,
         # so session.history alone can't show what the model was told.
-        self.contexts.append(tool_outputs(chat_ctx.items))
+        self.contexts.append((has_stop(chat_ctx.items), tool_outputs(chat_ctx.items)))
         if not self._scripted:
             async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
                 yield chunk
@@ -152,6 +165,16 @@ def make_llm(kind: str, model: str, chain: bool) -> llm.LLM:
     # store=False stops the plugin chaining with previous_response_id. Chained requests in 1.8.8
     # re-send the function_call the previous response already holds, so the model sees it twice.
     return openai.responses.LLM(model=model, store=False)
+
+
+def has_stop(items: list) -> bool:
+    return any(i.type == "message" and i.role == "user" and i.text_content == USER_STOP for i in items)
+
+
+def reply_context(contexts: list[tuple[bool, list[str]]], stopped: bool) -> list[str]:
+    if stopped:
+        return next((outputs for saw_stop, outputs in contexts if saw_stop), [])
+    return next((outputs for _, outputs in contexts if outputs), [])
 
 
 def tool_outputs(items: list) -> list[str]:
@@ -231,7 +254,9 @@ async def one_run(
     rows = ledger["rows"]
     agent_reply, followup_reply = split_replies(items, stopped)
     outputs = tool_outputs(items)
-    reply_context = agent.contexts[1] if len(agent.contexts) > 1 else []
+    if stopped and tool_called and not any(saw_stop for saw_stop, _ in agent.contexts):
+        raise RuntimeError("no llm_node call saw the stop message, so what the model had can't be read")
+    context = reply_context(agent.contexts, stopped)
     return RunResult(
         framework="livekit",
         livekit_version=lk_version,
@@ -241,8 +266,8 @@ async def one_run(
         refund_id=refund_id,
         ledger_count=ledger["count"],
         tool_outputs=outputs,
-        reply_context=reply_context,
-        placeholder_seen=any(_RUNNING_TOOL_PLACEHOLDER in o for o in outputs + reply_context),
+        reply_context=context,
+        placeholder_seen=any(_RUNNING_TOOL_PLACEHOLDER in o for o in outputs + context),
         interrupted_at=interrupted_at,
         received_at=rows[0]["received_at"] if rows else None,
         committed_at=rows[0]["committed_at"] if rows else None,
@@ -252,17 +277,6 @@ async def one_run(
         followup_reply=followup_reply,
         chained=None if llm_kind == "scripted" else chain,
     )
-
-
-def start_ledger(delay_ms: int) -> tuple[subprocess.Popen, int]:
-    port = free_port()
-    ledger = subprocess.Popen(
-        [sys.executable, "ledger.py", "--port", str(port), "--db", "runs/ledger-livekit.db",
-         "--commit-delay-ms", str(delay_ms)],
-        stdout=subprocess.PIPE,
-    )
-    ledger.stdout.readline()
-    return ledger, port
 
 
 async def main():
@@ -275,6 +289,7 @@ async def main():
     parser.add_argument("--commit-delay-ms", nargs="*", type=int, default=[400, 6000])
     parser.add_argument("--no-chain", action="store_true", help="don't chain OpenAI requests (store=False)")
     args = parser.parse_args()
+    assert_internals()
     if args.llm == "openai":
         args.model = args.model or "gpt-6.1-sol"
         load_env(Path(".env"))
@@ -285,31 +300,18 @@ async def main():
 
     logging.basicConfig(level=logging.WARNING)
     lk_version = version("livekit-agents")
-    Path("runs").mkdir(exist_ok=True)
-    Path("runs/ledger-livekit.db").unlink(missing_ok=True)
-
-    results = []
+    results = Results(Path(out), TOLD_SOURCE)
     for delay_ms in args.commit_delay_ms:
-        ledger, port = start_ledger(delay_ms)
-        try:
+        with ledger(results.db, delay_ms) as port:
             for moment in [Moment(m) for m in args.moments]:
                 for run in range(args.runs):
                     result = await one_run(
                         port, moment, delay_ms, run, lk_version, args.llm, args.model, not args.no_chain
                     )
-                    results.append(result)
+                    results.add(result)
                     reply = f'  agent: "{result.agent_reply}"' if args.llm != "scripted" else ""
                     print(f"delay={delay_ms:<5} {moment.value:12} #{run}  {result.verdict}{reply}", flush=True)
-        finally:
-            ledger.terminate()
-
-    with open(out, "w") as f:
-        for r in results:
-            f.write(json.dumps({
-                **asdict(r), "landed": r.landed, "told": r.told.value, "told_source": TOLD_SOURCE,
-                "verdict": r.verdict,
-            }) + "\n")
-    print(f"wrote {len(results)} runs to {out}")
+    print(f"wrote {results.count} runs to {out}")
 
 
 if __name__ == "__main__":

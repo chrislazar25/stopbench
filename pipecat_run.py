@@ -14,11 +14,10 @@ import argparse
 import asyncio
 import json
 import os
-import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -55,8 +54,9 @@ from stopbench import (
     USER_STOP,
     Marks,
     Moment,
+    Results,
     Told,
-    free_port,
+    ledger,
     load_env,
     reach_moment,
     verdict,
@@ -95,10 +95,9 @@ class RunResult:
         return verdict(self.tool_called, self.landed, Moment(self.moment), self.told)
 
 
-# Read after the run ends. Pipecat writes the result over the tool message only while
-# the conversation hasn't moved on (llm_response_universal.py, _handle_function_call_finished).
-# Once the stop starts a new turn, the result goes in a separate message, so the tool
-# message still holds what the model had when it answered the stop.
+# Read after the run ends. With cancel_on_interruption=False, a result that lands after the
+# stop goes in a separate developer message (_is_deferred in llm_response_universal.py), so
+# the tool message still holds what the model had when it answered.
 TOLD_SOURCE = "context_after_run"
 
 
@@ -280,7 +279,7 @@ async def main():
     parser.add_argument("--llm", choices=["scripted", *PROVIDERS], default="scripted")
     parser.add_argument("--model")
     parser.add_argument("--moments", nargs="*", default=[m.value for m in Moment])
-    parser.add_argument("--cancel", nargs="*", default=["true", "false"])
+    parser.add_argument("--cancel", nargs="*", choices=["true", "false"], default=["true", "false"])
     args = parser.parse_args()
     if args.llm != "scripted":
         key_var, default_model = PROVIDERS[args.llm]
@@ -295,38 +294,18 @@ async def main():
     from importlib.metadata import version
 
     pipecat_version = version("pipecat-ai")
-    port = free_port()
-    Path("runs").mkdir(exist_ok=True)
-    db = Path("runs/ledger.db")
-    db.unlink(missing_ok=True)
-    ledger = subprocess.Popen(
-        [sys.executable, "ledger.py", "--port", str(port), "--db", str(db),
-         "--commit-delay-ms", str(COMMIT_DELAY_MS)],
-        stdout=subprocess.PIPE,
-    )
-    ledger.stdout.readline()
-
-    results = []
-    try:
+    results = Results(Path(out), TOLD_SOURCE)
+    with ledger(results.db, COMMIT_DELAY_MS) as port:
         for cancel in [c == "true" for c in args.cancel]:
             for moment in [Moment(m) for m in args.moments]:
                 for run in range(args.runs):
                     result = await one_run(
                         port, moment, cancel, run, pipecat_version, args.llm, args.model
                     )
-                    results.append(result)
+                    results.add(result)
                     reply = f'  agent: "{result.agent_reply}"' if args.llm != "scripted" else ""
                     print(f"cancel={cancel!s:5} {moment.value:12} #{run}  {result.verdict}{reply}", flush=True)
-    finally:
-        ledger.terminate()
-
-    with open(out, "w") as f:
-        for r in results:
-            f.write(json.dumps({
-                **asdict(r), "landed": r.landed, "told": r.told.value, "told_source": TOLD_SOURCE,
-                "verdict": r.verdict,
-            }) + "\n")
-    print(f"wrote {len(results)} runs to {out}")
+    print(f"wrote {results.count} runs to {out}")
 
 
 if __name__ == "__main__":

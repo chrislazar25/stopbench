@@ -17,7 +17,7 @@
 
 Preconditions:
 
-- `verify.py doctor` prints `doctor: OK`, with no `livekit_run.py` running.
+- `verify.py doctor` prints `doctor: OK`.
 
 - **Stop before the request, 400 ms.** Run `python3 .claude/skills/verify-stopbench/verify.py run livekit --moments before_send --commit-delay-ms 400`. The console shows `IGNORED`. In `check.txt` the window passes, because the request reached the ledger about 200 ms after the stop.
 - **Placeholder, 6000 ms.** Run `python3 .claude/skills/verify-stopbench/verify.py run livekit --moments in_flight --commit-delay-ms 6000`. The console shows `PENDING: refund landed, model told still in progress`. It takes about 8 s and logs `speech not done in time after interruption`, which is LiveKit's own 5 s timeout firing.
@@ -26,6 +26,6 @@ Preconditions:
 
 ## Gotchas
 
-- The runner depends on private LiveKit names: `_RUNNING_TOOL_PLACEHOLDER`, `_claim_user_turn` and the `_final` call-id suffix. After a LiveKit upgrade, rerun the 6000 ms in-flight cell first. A silent change shows as `PENDING` turning into another verdict.
-- `reply_context` is the second `llm_node` call by position.
+- The runner depends on LiveKit internals: `_RUNNING_TOOL_PLACEHOLDER`, `_claim_user_turn`, the `_final` call-id suffix and the 5 s `INTERRUPTION_TIMEOUT`. `assert_internals()` stops the runner at startup if the last three moved. The placeholder text is imported, so only a change in how LiveKit uses it would slip past. After a LiveKit upgrade, rerun the 6000 ms in-flight cell first. A silent change shows as `PENDING` turning into another verdict.
+- `reply_context` comes from the first `llm_node` call whose context holds the stop message, or with no stop, the first that holds a tool output. A stopped run where no call saw the stop raises instead of reading as "model told nothing".
 - Without `--no-chain`, replies can claim a second refund that the ledger never got. That is the upstream bug, not a runner fault.
