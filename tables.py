@@ -17,7 +17,6 @@ from collections import Counter, defaultdict
 
 from stopbench import USER_STOP, Moment
 
-# A reply that contains any of these, ignoring case, tells the caller about a second refund.
 SECOND_REFUND = ["twice", "two $40 refund", "second $40 refund", "second refund", "second request", "duplicate refund"]
 
 AXIS = {"pipecat": "cancel_on_interruption", "livekit": "commit_delay_ms", "openai-agents-realtime": "async_tool_calls"}

@@ -112,7 +112,6 @@ def free_port() -> int:
 
 @contextmanager
 def ledger(db: Path, commit_delay_ms: int):
-    """Runs ledger.py as its own process, like a payments provider, and yields its port."""
     port = free_port()
     proc = subprocess.Popen(
         [sys.executable, "ledger.py", "--port", str(port), "--db", str(db), "--commit-delay-ms", str(commit_delay_ms),
@@ -146,9 +145,7 @@ def git_version() -> str:
 
 
 class Results:
-    """One JSON line per run, appended as each run ends, so a crash keeps the runs before it.
-    Never overwrites: committed results are evidence. The ledger db sits next to the file.
-    """
+    """Appends each run as it ends, so a crash keeps the earlier runs."""
 
     def __init__(self, out: Path, told_source: str):
         if out.exists():

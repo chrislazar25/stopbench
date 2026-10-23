@@ -147,8 +147,6 @@ def run(name: str, extra: list[str]) -> int:
 
 
 def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = None) -> int:
-    """Each record: ledger agrees, the stop landed in its moment's window, the verdict follows
-    from the record, and what the model was told re-derives from the record's own evidence."""
     sys.path.insert(0, str(ROOT))
     from stopbench import Moment, Told, verdict
 
@@ -208,7 +206,7 @@ print(json.dumps(bad))
 
 
 def rederive(jsonl: Path, name: str) -> list[str]:
-    """Runs in the runner's own venv, because told_from reads framework constants."""
+    """Runs in the runner's venv: importing the runner imports its framework."""
     code = REDERIVE.format(module=RUNNERS[name]["module"])
     out = subprocess.run([str(python(name)), "-c", code, str(jsonl)], capture_output=True, text=True, cwd=ROOT)
     if out.returncode != 0:

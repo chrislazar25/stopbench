@@ -95,10 +95,9 @@ class RunResult:
         return verdict(self.tool_called, self.landed, Moment(self.moment), self.told)
 
 
-# Read after the run ends. Pipecat writes the result over the tool message only while
-# the conversation hasn't moved on (llm_response_universal.py, _handle_function_call_finished).
-# Once the stop starts a new turn, the result goes in a separate message, so the tool
-# message still holds what the model had when it answered the stop.
+# Read after the run ends. With cancel_on_interruption=False, a result that lands after the
+# stop goes in a separate developer message (_is_deferred in llm_response_universal.py), so
+# the tool message still holds what the model had when it answered.
 TOLD_SOURCE = "context_after_run"
 
 

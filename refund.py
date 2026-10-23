@@ -1,8 +1,4 @@
-"""The refund tool's body and the ledger lookup, shared by every runner.
-
-Not in stopbench.py, which stays standard library only: this needs aiohttp, which every
-runner's venv has.
-"""
+"""Not in stopbench.py, which stays standard library only; this needs aiohttp."""
 
 import asyncio
 
@@ -12,7 +8,6 @@ from stopbench import AFTER_COMMIT_S, PREP_S, Marks
 
 
 async def issue_refund(url: str, refund_id: str, amount_cents: int, marks: Marks) -> dict:
-    """Sets the marks that define the moments, so every runner stops at the same points."""
     marks.started.set()
     await asyncio.sleep(PREP_S)
     async with aiohttp.ClientSession() as session:
