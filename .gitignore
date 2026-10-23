@@ -4,6 +4,7 @@ __pycache__/
 .env
 runs/*.tmp
 runs/*.db
+runs/mine/
 .venv-livekit/
 .venv-realtime/
 .verify/
