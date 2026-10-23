@@ -30,17 +30,18 @@ from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
-import aiohttp
 from livekit.agents import Agent, AgentSession, function_tool, llm
 from livekit.agents.utils import http_context
 from livekit.agents.voice.generation import _RUNNING_TOOL_PLACEHOLDER
 
+import refund
 from stopbench import (
     AFTER_COMMIT_S,
     LLM_TIMEOUT_S,
     PREP_S,
     SETTLE_S,
     SYSTEM_PROMPT,
+    TOOL_DESCRIPTION,
     USER_ASK,
     USER_STOP,
     Marks,
@@ -108,22 +109,13 @@ class RefundAgent(Agent):
         self._called = False
         self.contexts: list[list[str]] = []
 
-    @function_tool(description="Refund the caller's payment. Sends the refund to the payment provider.")
+    @function_tool(description=TOOL_DESCRIPTION)
     async def issue_refund(self, amount_cents: int) -> dict:
         """
         Args:
             amount_cents: Amount in cents.
         """
-        self._marks.started.set()
-        await asyncio.sleep(PREP_S)
-        async with aiohttp.ClientSession() as session:
-            self._marks.sent.set()
-            payload = {"refund_id": self._refund_id, "amount_cents": amount_cents}
-            async with session.post(self._url, json=payload) as resp:
-                body = await resp.json()
-        self._marks.committed.set()
-        await asyncio.sleep(AFTER_COMMIT_S)
-        return body
+        return await refund.issue_refund(self._url, self._refund_id, amount_cents, self._marks)
 
     async def llm_node(self, chat_ctx, tools, model_settings):
         # LiveKit injects "still in progress" outputs into this ctx without persisting them,
@@ -235,9 +227,7 @@ async def one_run(
             await asyncio.sleep(SETTLE_S)
         items = list(session.history.items)
 
-    async with aiohttp.ClientSession() as http:
-        async with http.get(f"{url}/{refund_id}") as resp:
-            ledger = await resp.json()
+    ledger = await refund.read_ledger(url, refund_id)
     rows = ledger["rows"]
     agent_reply, followup_reply = split_replies(items, stopped)
     outputs = tool_outputs(items)
