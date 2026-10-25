@@ -16,8 +16,9 @@ request in progress.
 
 The axis is the function tool's `async` flag (https://docs.vapi.ai/tools/custom-tools-troubleshooting#async-vs-sync-behavior):
 
-- False (default): Vapi waits for the webhook. A stop that arrives meanwhile gets no LLM
-  request until the result lands, so the model answers once with the real result. While it
+- False (default): Vapi waits for the webhook, so the model answers once with the real result.
+  A stop that arrives meanwhile can start an LLM request that Vapi drops, with no completion,
+  once the result lands (1 of 20 sync stop runs on 2026-10-25). While it
   waits, the conversation shows the call's tool message as "Tool Result Still Pending But
   Proceed Further If Possible."
 - True: Vapi writes "Success." as the tool's result as it sends the webhook, and never uses the
@@ -174,13 +175,16 @@ def read_log(log: Sequence[LogEvent], stopped: bool) -> Reading:
     errors = [e.message for e in log if isinstance(e, LogError)]
     requests = [e for e in log if isinstance(e, Request)]
     anchor = has_stop if stopped else (lambda r: bool(tool_results(r)))
-    at = next((i for i, r in enumerate(requests) if anchor(r)), None)
-    if at is None:
-        return Reading([], None, None, None, errors)
 
     def completion(span_id: str) -> Completion | None:
         done = [e for e in log if isinstance(e, Completion) and e.span_id == span_id]
         return next((c for c in done if c.succeeded), done[0] if done else None)
+
+    # Vapi can start a request after the stop and drop it, with no completion, once the
+    # tool's result lands; the reply is the first request that produced one.
+    at = next((i for i, r in enumerate(requests) if anchor(r) and completion(r.span_id)), None)
+    if at is None:
+        return Reading([], None, None, None, errors)
 
     reply = completion(requests[at].span_id)
     later = [c.text for r in requests[at + 1:] if (c := completion(r.span_id)) and c.text]

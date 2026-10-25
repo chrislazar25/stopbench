@@ -353,16 +353,20 @@ class Session:
         except Exception as e:
             self.log(SessionError(time.time(), f"{type(e).__name__}: {e}"))
 
-    def quiet(self) -> bool:
+    def quiet(self, stopped: bool) -> bool:
+        """Also waits for the reply itself: the model can think for over QUIET_S after the
+        tool's response before its first word.
+        """
         turn_events = [e for e in self.wire if isinstance(e, Speech | TurnEnd | ToolCall)]
         idle = not turn_events or isinstance(turn_events[-1], TurnEnd)
-        return all(t.done() for t in self.tools) and idle
+        answered = read_wire(self.wire, stopped).reply_status is not None
+        return all(t.done() for t in self.tools) and idle and answered
 
-    async def settled(self, timeout_s: float = LLM_TIMEOUT_S) -> None:
+    async def settled(self, stopped: bool, timeout_s: float = LLM_TIMEOUT_S) -> None:
         deadline = time.time() + timeout_s
         while (left := deadline - time.time()) > 0:
             self._changed.clear()
-            quiet = self.quiet()
+            quiet = self.quiet(stopped)
             try:
                 await asyncio.wait_for(self._changed.wait(), min(QUIET_S, left) if quiet else left)
             except TimeoutError:
@@ -394,7 +398,7 @@ async def one_run(
             interrupted_at = time.time()
             await session.say("stop", USER_STOP)
         if tool_called:
-            await session.settled()
+            await session.settled(stopped)
         receiver.cancel()
         await asyncio.gather(*session.tools)
 
