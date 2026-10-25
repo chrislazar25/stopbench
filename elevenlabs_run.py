@@ -304,6 +304,7 @@ class Conversation:
             if msg["type"] not in UNRECORDED:
                 self.wire.append({"t": time.time(), "dir": "in", "msg": msg})
                 self._changed.set()
+        self.wire.append({"t": time.time(), "dir": "in", "msg": {"type": "ws_closed", "code": self.ws.close_code}})
 
     async def run_tool(self, call: dict) -> None:
         body = await refund.issue_refund(self.url, self.refund_id, call["parameters"]["amount_cents"], self.marks)
