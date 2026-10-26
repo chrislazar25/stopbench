@@ -1,6 +1,6 @@
 ---
 name: verify-stopbench
-description: Drive the stopbench CLI runners (pipecat_run.py, livekit_run.py, realtime_run.py) and the fake payments ledger the way a user does, then prove the result against the ledger's SQLite rows. Use before claiming a runner change works, before adding README numbers, or when a run looks wrong.
+description: Drive the stopbench CLI runners (pipecat_run.py, livekit_run.py, realtime_run.py, and the hosted gemini_run.py, elevenlabs_run.py, retell_run.py, vapi_run.py) and the fake payments ledger the way a user does, then prove the result against the ledger's SQLite rows. Use before claiming a runner change works, before adding README numbers, or when a run looks wrong.
 ---
 
 # Verify stopbench
@@ -12,8 +12,8 @@ Every command below runs from the repo root. The helper is stdlib-only and runs 
 ```sh
 python3 .claude/skills/verify-stopbench/verify.py doctor
 python3 .claude/skills/verify-stopbench/verify.py ledger
-python3 .claude/skills/verify-stopbench/verify.py run <pipecat|livekit|realtime> [runner flags]
-python3 .claude/skills/verify-stopbench/verify.py check <file.jsonl> <pipecat|livekit|realtime> [ledger.db]
+python3 .claude/skills/verify-stopbench/verify.py run <pipecat|livekit|realtime|gemini|elevenlabs|retell|vapi> [runner flags]
+python3 .claude/skills/verify-stopbench/verify.py check <file.jsonl> <runner> [ledger.db]
 ```
 
 ## Launch
@@ -24,7 +24,10 @@ There is no server to keep alive. Launch means building each runner's venv once.
 python3.11 -m venv .venv && .venv/bin/pip install -r requirements.lock.txt
 python3.11 -m venv .venv-livekit && .venv-livekit/bin/pip install -r requirements-livekit.lock.txt
 python3.11 -m venv .venv-realtime && .venv-realtime/bin/pip install -r requirements-realtime.lock.txt
+python3.11 -m venv .venv-hosted && .venv-hosted/bin/pip install -r requirements-hosted.lock.txt
 ```
+
+The retell and vapi runners also need `cloudflared` on the PATH.
 
 Each `run` starts its own `ledger.py` on a free port and stops it when the matrix ends. The runner is ready when it prints its first result line. The realtime runner and every `--llm openai` run need `OPENAI_API_KEY` in `.env`, and they spend money (cents per run).
 
@@ -48,6 +51,10 @@ Run `verify.py doctor` first, and again whenever anything looks off. It is read-
 | `pipecat` | `--moments ...`, `--cancel true false`, `--llm openai` | free when scripted |
 | `livekit` | `--moments ...`, `--commit-delay-ms 400 6000`, `--llm openai --no-chain` | free when scripted |
 | `realtime` | `--moments ...`, `--async-tools true false`, `--commit-delay-ms ...` | paid, real model only |
+| `gemini` | `--moments ...`, `--behavior NON_BLOCKING BLOCKING` | paid |
+| `elevenlabs` | `--moments ...`, `--interruption-mode allow disable_during_tool` | paid, about 1 cent per run |
+| `retell` | `--moments ...`, `--speak-after-execution true false` | paid, about 5 cents per run |
+| `vapi` | `--moments ...`, `--async-tool false true` | paid, about 1 cent per run |
 
 `verify.py ledger` drives the ledger alone. It starts its own `ledger.py` with a db inside the evidence folder, posts a refund, hangs up after 0.1 s, and reads the refund back.
 
@@ -67,8 +74,9 @@ Proof goes to `.verify/<timestamp>-<label>-<random>/`, which is gitignored and n
 - The ledger's row count for the record's `refund_id` equals `ledger_count`. This needs the ledger db, which `run` passes on its own. A standalone `check` uses the `.db` next to the jsonl when there is one. Without one it prints `ledger NOT checked`, and that is the honest state of every committed `runs/*.jsonl`: their ledgers were deleted when the next run started.
 - The stop landed in its moment's window, measured from the ledger's own timestamps. `before_send` means the request arrived after the stop or never arrived. `in_flight` means the request arrived before the stop and committed after it. `after_commit` means the refund committed before the stop.
 - The stored `verdict` equals `stopbench.verdict()` of the record's own fields, so one wording and one precedence hold across runners.
-- The stored `told` (what the model had for the refund call when it answered the stop) re-derives from the record's evidence through the runner's `told_from`, run in that runner's venv. `told_source` names that evidence: `context_after_run` (Pipecat), `llm_node` (LiveKit) or `server_event_order` (realtime).
-- For realtime, `read_wire` rebuilds every derived field from the stored server events.
+- The stored `told` (what the model had for the refund call when it answered the stop) re-derives from the record's evidence through the runner's `told_from`, run in that runner's venv. `told_source` names that evidence: `context_after_run` (Pipecat), `llm_node` (LiveKit), `server_event_order` (realtime), `socket_order` (Gemini), `platform_transcript_order` (ElevenLabs), `retell_message_with_tool_calls_order` (Retell) or `vapi_call_log_llm_requests` (Vapi).
+- For every runner that defines `rederive(record)` (realtime and the four hosted runners), every derived field rebuilds from the evidence the record stores.
+- More than one ledger row for a refund reads `DOUBLE`, whatever the model was told.
 
 README numbers come from `python3 tables.py <files>` (cell counts, what the model had, verdicts, ms from the stop) and `python3 tables.py --second-refund <files>`. Copy numbers from its output, never by hand.
 

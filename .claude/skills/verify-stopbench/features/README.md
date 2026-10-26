@@ -33,3 +33,4 @@ Driven end to end through `verify.py` on 2026-10-22: ledger and pipecat (scripte
 - [Pipecat runner](./pipecat.md) covers the four moments under both `cancel_on_interruption` settings, scripted and with a real model.
 - [LiveKit runner](./livekit.md) covers the four moments at 400 ms and 6000 ms commits, scripted and with a real model.
 - [Realtime runner](./realtime.md) covers the OpenAI Agents SDK session under both `async_tool_calls` settings, real model only.
+- [Hosted runners](./hosted.md) covers Gemini Live, ElevenLabs Agents, Retell and Vapi, each under its own interrupt setting. All four were driven through `verify.py` on 2026-10-23.

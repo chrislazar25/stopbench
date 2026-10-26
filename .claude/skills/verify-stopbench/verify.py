@@ -8,6 +8,8 @@ Run from the repo root with any python3 (stdlib only):
     python3 .claude/skills/verify-stopbench/verify.py run pipecat --moments in_flight --cancel true
     python3 .claude/skills/verify-stopbench/verify.py check .verify/<id>/pipecat.jsonl pipecat [.verify/<id>/pipecat.db]
 
+Runners: pipecat, livekit, realtime, gemini, elevenlabs, retell, vapi.
+
 Evidence goes to .verify/<id>/ (gitignored) and survives cleanup.
 """
 
@@ -23,13 +25,18 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path.cwd()
+HOSTED = {"venv": ".venv-hosted", "req": "requirements-hosted.txt", "lock": "requirements-hosted.lock.txt", "paid": True}
 RUNNERS = {
     "pipecat": {"script": "pipecat_run.py", "module": "pipecat_run", "venv": ".venv", "req": "requirements.txt", "lock": "requirements.lock.txt",
-                "axis": "cancel_on_interruption", "paid": False},
+                "axis": "cancel_on_interruption", "paid": False, "key": None},
     "livekit": {"script": "livekit_run.py", "module": "livekit_run", "venv": ".venv-livekit", "req": "requirements-livekit.txt", "lock": "requirements-livekit.lock.txt",
-                "axis": "commit_delay_ms", "paid": False},
+                "axis": "commit_delay_ms", "paid": False, "key": None},
     "realtime": {"script": "realtime_run.py", "module": "realtime_run", "venv": ".venv-realtime", "req": "requirements-realtime.txt", "lock": "requirements-realtime.lock.txt",
-                 "axis": "async_tool_calls", "paid": True},
+                 "axis": "async_tool_calls", "paid": True, "key": "OPENAI_API_KEY"},
+    "gemini": {"script": "gemini_run.py", "module": "gemini_run", **HOSTED, "axis": "behavior", "key": "GOOGLE_API_KEY"},
+    "elevenlabs": {"script": "elevenlabs_run.py", "module": "elevenlabs_run", **HOSTED, "axis": "interruption_mode", "key": "ELEVENLABS_API_KEY"},
+    "retell": {"script": "retell_run.py", "module": "retell_run", **HOSTED, "axis": "speak_after_execution", "key": "RETELL_API_KEY"},
+    "vapi": {"script": "vapi_run.py", "module": "vapi_run", **HOSTED, "axis": "async_tool", "key": "VAPI_PRIVATE_KEY"},
 }
 # Where each stop moment must land relative to the ledger, in ms from the stop. The harness
 # builds these windows (stopbench.py), so a run outside one measured the wrong moment.
@@ -56,7 +63,11 @@ def doctor() -> int:
     if not (ROOT / "stopbench.py").exists():
         print("FAIL not at the stopbench repo root (no stopbench.py here)")
         return 1
+    checked = set()
     for name, r in RUNNERS.items():
+        if r["venv"] in checked:
+            continue
+        checked.add(r["venv"])
         py = python(name)
         if not py.exists():
             problems.append(f"{name}: missing {r['venv']} (python3.11 -m venv {r['venv']} && {r['venv']}/bin/pip install -r {r['req']})")
@@ -79,8 +90,9 @@ def doctor() -> int:
             print(f"{name:9} matches {r['lock']} ({len(locked)} packages)")
     names = env_names()
     print(f"keys in .env: {sorted(names) or 'none'}")
-    if "OPENAI_API_KEY" not in names:
-        problems.append("OPENAI_API_KEY missing from .env (needed for realtime and --llm openai)")
+    for name, r in RUNNERS.items():
+        if r["key"] and r["key"] not in names:
+            problems.append(f"{r['key']} missing from .env (needed for {name})")
     for p in problems:
         print(f"FAIL {p}")
     print("doctor: OK" if not problems else f"doctor: {len(problems)} problem(s)")
@@ -168,7 +180,7 @@ def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = Non
             ms = lambda t: None if t is None else (t - stop) * 1000
             if not WINDOWS[rec["moment"]](ms(rec["received_at"]), ms(rec["committed_at"])):
                 failures.append(f"{rec['refund_id']}: stop outside the {rec['moment']} window")
-        expected = verdict(rec["tool_called"], n > 0, Moment(rec["moment"]), Told(rec["told"]))
+        expected = verdict(rec["tool_called"], n, Moment(rec["moment"]), Told(rec["told"]))
         if rec["verdict"] != expected or rec["landed"] != (n > 0):
             failures.append(f"{rec['refund_id']}: record says {rec['verdict']!r}, the ledger and told give {expected!r}")
         cells[(rec[r["axis"]], rec["moment"])].append(rec)
@@ -188,18 +200,14 @@ def check(jsonl: Path, name: str, db: Path | None = None, out: Path | None = Non
 
 REDERIVE = """
 import json, sys
-from {module} import TOLD_SOURCE, told_from
-realtime = {module!r} == "realtime_run"
-if realtime:
-    from realtime_run import load_wire, read_wire
+import {module} as runner
 bad = []
 for line in open(sys.argv[1]):
     r = json.loads(line)
-    if realtime:
-        reading = read_wire(load_wire(r["wire"]), r["moment"] != "none")
-        if any(r[k] != v for k, v in reading.__dict__.items()):
-            bad.append(f"{{r['refund_id']}}: fields don't re-derive from the wire")
-    if r["told"] != told_from(r).value or r["told_source"] != TOLD_SOURCE:
+    if hasattr(runner, "rederive"):
+        if any(r[k] != v for k, v in runner.rederive(r).items()):
+            bad.append(f"{{r['refund_id']}}: fields don't re-derive from the stored evidence")
+    if r["told"] != runner.told_from(r).value or r["told_source"] != runner.TOLD_SOURCE:
         bad.append(f"{{r['refund_id']}}: told {{r['told']!r}} doesn't follow from the record")
 print(json.dumps(bad))
 """
